@@ -6,12 +6,17 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
+from cryptography.exceptions import InvalidSignature
 import random
 import json
 import math
-import hmac, hashlib
+import hmac
+import hashlib
 import os
 import base64
+import sqlite3
 
 #!TEMP - MAKE BETTER SYSTEM FOR IDENTIFICATION
 identifier = input("PEER IDENTIFIER : ")
@@ -30,6 +35,8 @@ class Peer():
         self.DHEBitLength = 512 #TODO : Consider 1024 in the future
         self.messagePadLength = 2048
         self.messageLength = 1900
+        self.knownUsers = []
+        self.databaseName = f"Peer{identifier}Database.db"
         
         #Logging setup
         self.logFormatter = colorlog.ColoredFormatter(
@@ -74,7 +81,25 @@ class Peer():
         self.incomingConnectionSocket.bind((self.incomingConnectionHost, self.incomingConnectionPort))
         self.incomingConnectionSocket.listen(5)
         self.logger.info("SERVER STARTED UP")
-    
+        
+        #SQL
+        conn = sqlite3.connect(self.databaseName)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS savedUsers (
+                identifier STRING NOT NULL UNIQUE,
+                publicKey BLOB NOT NULL
+            )
+        ''')
+
+        cursor.execute("SELECT * FROM savedUsers")
+        rows = cursor.fetchall()
+        self.knownUsers = [row[0] for row in rows]
+
+        # Commit changes and close the connection
+        conn.commit()
+        conn.close()
+            
     def WaitForIncomingRequests(self):
         while True:
             self.logger.info("WAITING FOR REQUESTS")
@@ -90,12 +115,37 @@ class Peer():
     
     def HandleIncomingConnection(self, peerSocket):
         #TODO
+        conn = sqlite3.connect(self.databaseName)
+        cursor = conn.cursor()
+        
         details = json.loads(peerSocket.recv(128).rstrip(b"\0").decode())
         self.logger.info(f"RECIEVED {details}")
         
         if(details["type"] == "sessionRequest"):
             incomingPayloadLength = details["DHEPayloadLength"]
-            peerSocket.send(json.dumps({"type" : "sessionRequestAccept"}).encode().ljust(64, b"\0"))
+            senderIdentifier = details["identifier"]
+            if(senderIdentifier not in self.knownUsers):
+                shouldRequestKey = True
+            else:
+                shouldRequestKey = False
+            self.logger.info(f"NEW REQUEST FROM {senderIdentifier}")
+            peerSocket.send(json.dumps({"type" : "sessionRequestAccept", "keyRequest" : shouldRequestKey}).encode().ljust(128, b"\0"))
+            
+            if(shouldRequestKey):
+                self.logger.debug("REQUESTING KEY")
+                senderPublicKey = json.loads(peerSocket.recv(128).rstrip(b"\0").decode())["publicKey"]
+                senderPublicKey = base64.b64decode(senderPublicKey)
+                
+                #Updating SQL
+                cursor.execute("INSERT INTO savedUsers (identifier, publicKey) VALUES (?, ?)", (senderIdentifier, senderPublicKey))
+                conn.commit()
+                self.knownUsers.append(senderIdentifier)
+            else:
+                self.logger.debug(f"ALREADY HAVE KEY FOR {senderIdentifier}")
+                cursor.execute("SELECT * FROM savedUsers WHERE identifier = ?", (senderIdentifier,))
+                senderPublicKey = cursor.fetchone()[1]
+            
+            senderPublicKey = ed25519.Ed25519PublicKey.from_public_bytes(senderPublicKey)
             
             payload = json.loads(peerSocket.recv(incomingPayloadLength).decode())
             self.logger.debug(f"PAYLOAD {payload}")
@@ -126,6 +176,7 @@ class Peer():
             message = json.loads(peerSocket.recv(self.messagePadLength).rstrip(b"\0").decode())
             nonce = base64.b64decode(message["nonce"])
             hmacTag = base64.b64decode(message["hmacTag"])
+            signature = base64.b64decode(message["signature"])
             ciphertext = base64.b64decode(message["ciphertext"])
             
             #HMAC test   
@@ -141,11 +192,45 @@ class Peer():
             
             self.logger.info(f"RECIEVED PLAINTEXT {plaintext}")
     
+            #Signature test
+            try:
+                senderPublicKey.verify(signature, plaintext.encode())
+            except InvalidSignature:
+                self.logger.critical(f"INVALID SIGNATURE - DO NOT TRUST")
+    
+        conn.close()
+    
     def StartSession(self):
         #TODO
+        #Setup ED25519 - Shorter keys than RSA due to elliptical witchery
+        if(os.path.isfile(f"public{identifier}.key") and (os.path.isfile(f"private{identifier}.key"))):
+            with open(f"private{identifier}.key", "rb") as f:
+                privateKey = ed25519.Ed25519PrivateKey.from_private_bytes(f.read())
+            with open(f"public{identifier}.key", "rb") as f:
+                publicKey = ed25519.Ed25519PublicKey.from_public_bytes(f.read())
+        
+        else:
+            #Making new ED25519 Keys
+            privateKey = ed25519.Ed25519PrivateKey.generate()
+            publicKey = privateKey.public_key()
+            
+            with open(f"private{identifier}.key", "wb") as f:
+                f.write(privateKey.private_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PrivateFormat.Raw,
+                    encryption_algorithm=serialization.NoEncryption()
+                ))
+            
+            with open(f"public{identifier}.key", "wb") as f:
+                f.write(publicKey.public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw
+                ))
+        
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as outputSocket:
             port = int(input("LISTENER PORT"))   
-            outputSocket.connect(("127.0.0.1", port))
+            outputSocket.connect(("127.0.0.1", port))            
+            
             #Choosing the DHE p,g and a
             p = self.GeneratePrime(self.DHEBitLength)
             g = self.GeneratePrime(self.DHEBitLength)
@@ -158,20 +243,30 @@ class Peer():
             
             self.logger.debug("FOUND A")
             
-            #Sending p g and A
+            #Generating p g and A payload
             payload = json.dumps({"p" : p, "g" : g, "A" : A}).encode()
             
             #Sending a session request and the length of the payload
-            outputSocket.send(json.dumps({"type" : "sessionRequest", "DHEPayloadLength" : math.ceil(len(payload) / 256) * 256}).encode().ljust(128, b"\0"))
+            outputSocket.send(json.dumps({"type" : "sessionRequest", "identifier" : identifier ,"DHEPayloadLength" : math.ceil(len(payload) / 256) * 256}).encode().ljust(128, b"\0"))
             self.logger.debug("SENT REQUEST + DETAILS")
             
-            response = json.loads(outputSocket.recv(64).rstrip(b"\0").decode())
+            response = json.loads(outputSocket.recv(128).rstrip(b"\0").decode())
             
             if(response["type"] != "sessionRequestAccept"):
                 self.logger.debug("FAILED REQUEST")
                 return
             
-            #Sending the payload
+            if(response["keyRequest"] == True):
+                #Sending public key
+                publicKeyBytes = publicKey.public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw
+                )
+                
+                self.logger.debug("Sending Key Request")
+                
+                
+                outputSocket.send(json.dumps({"publicKey" : base64.b64encode(publicKeyBytes).decode()}).encode().ljust(128, b"\0"))
             outputSocket.send(payload)
             self.logger.debug("SENT PAYLOAD")
             
@@ -194,13 +289,14 @@ class Peer():
             
             #Sending message
             #TODO : make proper messaging system
-            messagePayload = json.dumps(self.CalculateMessage(AESKey, b"TEST MESSAGE 123", sBytes)).encode()
+            messageData = b"TEST MESSAGE 123"
+            messagePayload = json.dumps(self.CalculateMessage(AESKey, messageData, sBytes, privateKey)).encode()
             self.logger.debug(f"Message Payload Length : {len(messagePayload)}")
             
             outputSocket.send(messagePayload.ljust(self.messagePadLength, b"\0"))
             
             
-    def CalculateMessage(self, AESKey, plaintext, sBytes):
+    def CalculateMessage(self, AESKey, plaintext, sBytes, edPrivateKey):
         nonce = os.urandom(12)
         aesGCM = AESGCM(AESKey)
         ciphertext = aesGCM.encrypt(nonce, plaintext, None)
@@ -209,9 +305,12 @@ class Peer():
         
         hmacTag = hmac.new(sBytes, ciphertext, hashlib.sha256).digest()
         
+        #ED - signature
+        signature = edPrivateKey.sign(plaintext)
         return {
         "nonce": base64.b64encode(nonce).decode(), #Doing this because json.dumps doesnt like b""
         "hmacTag": base64.b64encode(hmacTag).decode(),
+        "signature" : base64.b64encode(signature).decode(),
         "ciphertext": base64.b64encode(ciphertext).decode()
     }
 

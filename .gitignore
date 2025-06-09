@@ -92,3 +92,5 @@ typings/
 out/
 
 *.pem
+*.key
+*.db
