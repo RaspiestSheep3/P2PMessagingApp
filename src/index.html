@@ -3,10 +3,49 @@
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta charset="UTF-8" />
-    <title>Electron Forge App</title>
+    <title>___ Messaging</title>
+    <!--Font Bits-->
+    <link rel="stylesheet" href="index.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css">
   </head>
   <body>
-    <h1>Hello World!</h1>
-    <p>Welcome to your Electron application.</p>
+    <div id="sidebar">
+      <div class="displayText sidebarElement" id="Speech Icon">
+        <i class="fa fa-comments"></i>
+      </div>
+      <div class="displayText sidebarElement" id="Settings Icon">
+        <i class="fa fa-gear"></i>
+      </div>
+    </div>
+    <div id="chatlist">
+       <input class="input" type="text" placeholder="Search For User" id="searchForUserInput">
+      <ul id="chatlistUL">
+        <li class="displayText chatlistElement">John Smith</li>
+        <li class="displayText chatlistElement">Jean Marc</li>
+        <li class="displayText chatlistElement">Family Group Chat</li>
+      </ul>
+      </div>
+    <div id="chatHistory">
+      <div class="displayText" id="contactBanner">
+        <h1>John Smith</h1>
+      </div>
+      <div id="chat">
+        <div class="displayText message messageIncoming">
+          <p>This is a test message</p>
+        </div>
+        <div class="displayText message messageOutgoing">
+          <p>This is a test return message</p>
+        </div>  
+        <div class="displayText message messageOutgoing">
+          <p>This is a test long message. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Praesent tincidunt magna sed mi euismod, auctor varius nulla interdum. Nunc sit amet justo imperdiet, feugiat odio vel, lobortis massa. Sed ornare lacus in sem egestas, nec pellentesque felis auctor. Nam venenatis at quam ut aliquet. Sed sodales ornare justo sit amet consequat.</p>
+        </div>
+        <div class="displayText message Incoming">
+          <p>This is another test long message. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Praesent tincidunt magna sed mi euismod, auctor varius nulla interdum. Nunc sit amet justo imperdiet, feugiat odio vel, lobortis massa. Sed ornare lacus in sem egestas, nec pellentesque felis auctor. Nam venenatis at quam ut aliquet. Sed sodales ornare justo sit amet consequat.</p>
+        </div>
+      </div>
+    </div>
   </body>
 </html>

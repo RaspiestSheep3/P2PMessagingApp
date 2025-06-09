@@ -1,7 +1,149 @@
-body {
+/*body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
     Arial, sans-serif;
   margin: auto;
   max-width: 38rem;
   padding: 2rem;
+}*/
+
+:root {
+  --backgroundColour: #1d1e21;
+  --mainColour:#8d2523;
+  --accentColour: #ff4537;
+}
+
+*{
+  margin:0;
+  padding: 0;
+  font-family: "Roboto Mono", serif; /*font to use*/
+}
+
+body {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  width: 100%;
+  margin: 0;
+  flex-direction: row;
+  overflow-y: auto;
+  background-color: var(--backgroundColour); 
+  overflow-x: hidden; /* Prevent horizontal scroll */
+}
+
+.displayText{
+    color : var(--mainColour);
+}
+
+#sidebar {
+  background-color: var(--mainColour);
+  width: 50px;
+  height : 97%;
+  margin: 5px 10px 5px 0px;
+  border-top-right-radius: 20px;
+  border-bottom-right-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  text-align: center;
+  justify-content: center;
+}
+
+#chatlist {
+  border: 3px solid var(--accentColour);
+  border-radius: 20px;
+  width: 600px;
+  height : 97%;
+  margin: 5px 10px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: scroll;
+}
+
+#chatlist::-webkit-scrollbar { 
+  display: none;
+}
+
+#chatHistory {
+  border: 3px solid var(--accentColour);
+  border-radius: 20px;
+  width: 830px;
+  height : 97%;
+  margin : 5px 5px 5px 10px;
+}
+
+.input {
+  border : 2px solid var(--accentColour);
+  border-radius: 20px;
+  background-color: var(--backgroundColour);
+  text-align: center;
+  color: var(--mainColour);
+}
+
+#searchForUserInput{
+  margin: 10px auto;
+  width : 300px;
+  height: 30px;
+}
+
+#contactBanner {
+  width : 80%;
+  height : 50px;
+  border: 2px solid var(--mainColour);
+  border-radius: 20px;
+  text-align: center;
+  margin: 5px auto;
+}
+
+#chat {
+  display: flex;
+  flex-direction: column;
+  height: 89%;
+  overflow-y: scroll;
+}
+
+#chat::-webkit-scrollbar { 
+  display: none; 
+}
+
+.message {
+  max-width: 50%;
+    width: fit-content;
+  border: 2px solid var(--mainColour);
+  border-radius: 20px;
+  padding: 5px;
+  margin: 5px;
+  font-weight: 500;
+}
+
+.messageIncoming {
+  text-align: left;
+  justify-content: flex-start;
+}
+
+.messageOutgoing {
+  text-align: right;
+  align-self: flex-end;
+  border-color : var(--accentColour); 
+}
+
+#chatlistUL {
+  list-style : none;
+}
+
+.chatlistElement{
+  text-align: center;
+  border: 2px solid var(--mainColour);
+  border-radius: 20px;
+  padding: 5px;
+  margin: 5px;
+}
+
+.sidebarElement {
+  height: 40%;
+  font-size : 30px;
+  color : var(--backgroundColour);
+  display: flex;
+  justify-content: center;   
+  align-items: center;   
+  cursor : pointer;    
 }
