@@ -2,13 +2,6 @@ import socket
 import threading
 import logging
 import colorlog
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.asymmetric import ed25519
-from cryptography.hazmat.primitives import serialization
-from cryptography.exceptions import InvalidSignature
 import random
 import json
 import math
@@ -17,6 +10,14 @@ import hashlib
 import os
 import base64
 import sqlite3
+import re
+from datetime import datetime
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.exceptions import InvalidSignature
 
 #!TEMP - MAKE BETTER SYSTEM FOR IDENTIFICATION
 identifier = input("PEER IDENTIFIER : ")
@@ -37,6 +38,8 @@ class Peer():
         self.messageLength = 1900
         self.knownUsers = []
         self.databaseName = f"Peer{identifier}Database.db"
+        self.publicKey = b""
+        self.privateKey = b""
         
         #Logging setup
         self.logFormatter = colorlog.ColoredFormatter(
@@ -94,11 +97,55 @@ class Peer():
 
         cursor.execute("SELECT * FROM savedUsers")
         rows = cursor.fetchall()
-        self.knownUsers = [row[0] for row in rows]
+        self.knownUsers = {row[0] : row[1] for row in rows}
 
         # Commit changes and close the connection
         conn.commit()
         conn.close()
+        
+        #Setup ED25519 - Shorter keys than RSA due to elliptical witchery
+        if(os.path.isfile(f"public{identifier}.key") and (os.path.isfile(f"private{identifier}.key"))):
+            with open(f"private{identifier}.key", "rb") as f:
+                privateKey = ed25519.Ed25519PrivateKey.from_private_bytes(f.read())
+            with open(f"public{identifier}.key", "rb") as f:
+                publicKey = ed25519.Ed25519PublicKey.from_public_bytes(f.read())
+        
+        else:
+            #Making new ED25519 Keys
+            privateKey = ed25519.Ed25519PrivateKey.generate()
+            publicKey = privateKey.public_key()
+            
+            with open(f"private{identifier}.key", "wb") as f:
+                f.write(privateKey.private_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PrivateFormat.Raw,
+                    encryption_algorithm=serialization.NoEncryption()
+                ))
+            
+            with open(f"public{identifier}.key", "wb") as f:
+                f.write(publicKey.public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw
+                ))
+        
+        self.publicKey = publicKey
+        self.privateKey = privateKey
+        
+    #Public Key Visualiser
+    def VisualisePublicKey(self, userIdentifier):
+        key = None
+        if(userIdentifier == identifier):
+            key = self.publicKey.public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw
+                ).hex()
+        elif(userIdentifier in self.knownUsers):
+            key = (self.knownUsers[userIdentifier]).hex()
+        
+        if(key != None):
+            key = ":".join(key[i:i+4] for i in range(0, len(key), 4)) #Writes as abcd:1234:efgh
+        
+        return key
             
     def WaitForIncomingRequests(self):
         while True:
@@ -129,7 +176,7 @@ class Peer():
             else:
                 shouldRequestKey = False
             self.logger.info(f"NEW REQUEST FROM {senderIdentifier}")
-            peerSocket.send(json.dumps({"type" : "sessionRequestAccept", "keyRequest" : shouldRequestKey}).encode().ljust(128, b"\0"))
+            peerSocket.send(json.dumps({"type" : "sessionRequestAccept", "keyRequest" : shouldRequestKey, "identifier" : identifier}).encode().ljust(128, b"\0"))
             
             if(shouldRequestKey):
                 self.logger.debug("REQUESTING KEY")
@@ -139,7 +186,7 @@ class Peer():
                 #Updating SQL
                 cursor.execute("INSERT INTO savedUsers (identifier, publicKey) VALUES (?, ?)", (senderIdentifier, senderPublicKey))
                 conn.commit()
-                self.knownUsers.append(senderIdentifier)
+                self.knownUsers[senderPublicKey] = senderPublicKey #Adding to dict
             else:
                 self.logger.debug(f"ALREADY HAVE KEY FOR {senderIdentifier}")
                 cursor.execute("SELECT * FROM savedUsers WHERE identifier = ?", (senderIdentifier,))
@@ -172,12 +219,28 @@ class Peer():
                 backend=default_backend()
             ).derive(sBytes)
             
+            #Avoiding SQL Injection - Only allow nums, letters and _s
+            if(re.sub(r"\W+", "", senderIdentifier) != senderIdentifier):
+                self.logger.error(f"SENDER IDENTIFIER IS INVALID - ATTEMPTED SQL INJECTION")
+                return
+            
+            #Creating the SQL table
+            cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS chat{senderIdentifier} (
+                timestamp TEXT NOT NULL,
+                isSender INT NOT NULL,
+                message TEXT NOT NULL
+            )
+            ''')
+            conn.commit()
+            
             #Receiving message
             message = json.loads(peerSocket.recv(self.messagePadLength).rstrip(b"\0").decode())
             nonce = base64.b64decode(message["nonce"])
             hmacTag = base64.b64decode(message["hmacTag"])
             signature = base64.b64decode(message["signature"])
             ciphertext = base64.b64decode(message["ciphertext"])
+            timestamp = message["timestamp"]
             
             #HMAC test   
             expectedHmacTag = hmac.new(sBytes, ciphertext, hashlib.sha256).digest()
@@ -185,48 +248,31 @@ class Peer():
                 self.logger.info("HMAC TAG CORRECT")
             else:
                 self.logger.error("HMAC TAG INCORRECT - DATA TAMPERED OR FORGED")
+                return
                 
             #Decrypting ciphertext
             aesGCM = AESGCM(AESKey)
             plaintext = aesGCM.decrypt(nonce, ciphertext, None).decode()
             
-            self.logger.info(f"RECIEVED PLAINTEXT {plaintext}")
-    
             #Signature test
             try:
                 senderPublicKey.verify(signature, plaintext.encode())
             except InvalidSignature:
                 self.logger.critical(f"INVALID SIGNATURE - DO NOT TRUST")
+                return
+            
+            self.logger.info(f"RECIEVED PLAINTEXT {plaintext} which was sent at {timestamp}")
+            
+            #Adding message to the SQL
+            cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, isSender, message) VALUES (?, ?, ?)", (timestamp, int(False), plaintext))
+            conn.commit()
     
         conn.close()
     
     def StartSession(self):
         #TODO
-        #Setup ED25519 - Shorter keys than RSA due to elliptical witchery
-        if(os.path.isfile(f"public{identifier}.key") and (os.path.isfile(f"private{identifier}.key"))):
-            with open(f"private{identifier}.key", "rb") as f:
-                privateKey = ed25519.Ed25519PrivateKey.from_private_bytes(f.read())
-            with open(f"public{identifier}.key", "rb") as f:
-                publicKey = ed25519.Ed25519PublicKey.from_public_bytes(f.read())
-        
-        else:
-            #Making new ED25519 Keys
-            privateKey = ed25519.Ed25519PrivateKey.generate()
-            publicKey = privateKey.public_key()
-            
-            with open(f"private{identifier}.key", "wb") as f:
-                f.write(privateKey.private_bytes(
-                    encoding=serialization.Encoding.Raw,
-                    format=serialization.PrivateFormat.Raw,
-                    encryption_algorithm=serialization.NoEncryption()
-                ))
-            
-            with open(f"public{identifier}.key", "wb") as f:
-                f.write(publicKey.public_bytes(
-                    encoding=serialization.Encoding.Raw,
-                    format=serialization.PublicFormat.Raw
-                ))
-        
+        conn = sqlite3.connect(self.databaseName)
+        cursor = conn.cursor()
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as outputSocket:
             port = int(input("LISTENER PORT"))   
             outputSocket.connect(("127.0.0.1", port))            
@@ -256,9 +302,11 @@ class Peer():
                 self.logger.debug("FAILED REQUEST")
                 return
             
+            recipientIdentifier = response["identifier"] 
+            
             if(response["keyRequest"] == True):
                 #Sending public key
-                publicKeyBytes = publicKey.public_bytes(
+                publicKeyBytes = self.publicKey.public_bytes(
                     encoding=serialization.Encoding.Raw,
                     format=serialization.PublicFormat.Raw
                 )
@@ -287,14 +335,34 @@ class Peer():
                 backend=default_backend()
             ).derive(sBytes)
             
+            #Avoiding SQL Injection - Only allow nums, letters and _s
+            if(re.sub(r"\W+", "", recipientIdentifier) != recipientIdentifier):
+                self.logger.error(f"RECIPIENT IDENTIFIER IS INVALID - ATTEMPTED SQL INJECTION")
+                return
+            
+            #Creating the SQL table
+            cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS chat{recipientIdentifier} (
+                timestamp TEXT NOT NULL,
+                isSender INT NOT NULL,
+                message TEXT NOT NULL
+            )
+            ''')
+            conn.commit()
+            
             #Sending message
             #TODO : make proper messaging system
             messageData = b"TEST MESSAGE 123"
-            messagePayload = json.dumps(self.CalculateMessage(AESKey, messageData, sBytes, privateKey)).encode()
+            messagePayload = json.dumps(self.CalculateMessage(AESKey, messageData, sBytes, self.privateKey)).encode()
             self.logger.debug(f"Message Payload Length : {len(messagePayload)}")
             
             outputSocket.send(messagePayload.ljust(self.messagePadLength, b"\0"))
+
+            #Adding message to the SQL
+            cursor.execute(f"INSERT INTO chat{recipientIdentifier} (timestamp, isSender, message) VALUES (?, ?, ?)", (messagePayload["timestamp"], int(True), messageData))
+            conn.commit()
             
+        conn.close()   
             
     def CalculateMessage(self, AESKey, plaintext, sBytes, edPrivateKey):
         nonce = os.urandom(12)
@@ -307,11 +375,16 @@ class Peer():
         
         #ED - signature
         signature = edPrivateKey.sign(plaintext)
+        
+        #Timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
         return {
         "nonce": base64.b64encode(nonce).decode(), #Doing this because json.dumps doesnt like b""
         "hmacTag": base64.b64encode(hmacTag).decode(),
         "signature" : base64.b64encode(signature).decode(),
-        "ciphertext": base64.b64encode(ciphertext).decode()
+        "ciphertext": base64.b64encode(ciphertext).decode(),
+        "timestamp" : timestamp
     }
 
     def GeneratePrime(self, bitLength):
@@ -356,6 +429,12 @@ if __name__ == "__main__":
     peer.logger.debug("STARTING UP")
     peer.Start()
     threading.Thread(target = peer.WaitForIncomingRequests, daemon=False).start()
+    
+    #Key visualiser
+    keyToVisualise = input("Key To Visualise : ")
+    if(keyToVisualise.strip() != ""):
+        peer.logger.info(peer.VisualisePublicKey(keyToVisualise))
+    
     shouldSend = input("SHOULD SEND?")
     if(shouldSend == "Y"):
         peer.StartSession()
