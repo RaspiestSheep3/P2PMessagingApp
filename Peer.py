@@ -11,6 +11,8 @@ import os
 import base64
 import sqlite3
 import re
+import keyring
+from cryptography.fernet import Fernet
 from datetime import datetime
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -38,8 +40,11 @@ class Peer():
         self.messageLength = 1900
         self.knownUsers = []
         self.databaseName = f"Peer{identifier}Database.db"
-        self.publicKey = b""
-        self.privateKey = b""
+        self.publicKey = None
+        self.privateKey = None
+        self.fernetKey = None
+        self.hashedIdentifier =  hashlib.sha256(identifier.encode()).hexdigest()
+        self.appName = "P2PMessagingApp"
         
         #Logging setup
         self.logFormatter = colorlog.ColoredFormatter(
@@ -130,6 +135,18 @@ class Peer():
         
         self.publicKey = publicKey
         self.privateKey = privateKey
+        
+        #Setting up Fernet key - used for SQL encryption
+        keyringKey = keyring.get_password(self.appName, self.hashedIdentifier)
+        if(keyringKey == None):
+            #Need to make a new keyring key
+            self.fernetKey = Fernet.generate_key()
+            keyring.set_password(self.appName, self.hashedIdentifier, self.fernetKey.decode())
+        else:
+            self.fernetKey = keyringKey.encode()
+        
+        #!TEMP
+        self.logger.warning(f"FERNET KEY (DELETE THIS) : {self.fernetKey}")
         
     #Public Key Visualiser
     def VisualisePublicKey(self, userIdentifier):
@@ -228,7 +245,7 @@ class Peer():
             cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS chat{senderIdentifier} (
                 timestamp TEXT NOT NULL,
-                isSender INT NOT NULL,
+                isSender TEXT NOT NULL,
                 message TEXT NOT NULL
             )
             ''')
@@ -263,8 +280,12 @@ class Peer():
             
             self.logger.info(f"RECIEVED PLAINTEXT {plaintext} which was sent at {timestamp}")
             
+            #Encrypting the message with Fernet
+            cipher = Fernet(self.fernetKey)
+            messageFernet = cipher.encrypt(message.encode())
+            
             #Adding message to the SQL
-            cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, isSender, message) VALUES (?, ?, ?)", (timestamp, int(False), plaintext))
+            cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, isSender, message) VALUES (?, ?, ?)", (timestamp, senderIdentifier, messageFernet))
             conn.commit()
     
         conn.close()
@@ -344,8 +365,8 @@ class Peer():
             cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS chat{recipientIdentifier} (
                 timestamp TEXT NOT NULL,
-                isSender INT NOT NULL,
-                message TEXT NOT NULL
+                senderIdentifier TEXT NOT NULL,
+                message BLOB NOT NULL
             )
             ''')
             conn.commit()
@@ -358,8 +379,13 @@ class Peer():
             
             outputSocket.send(messagePayload.ljust(self.messagePadLength, b"\0"))
 
+            #Encrypting message with SQL
+            #Encrypting the message with Fernet
+            cipher = Fernet(self.fernetKey)
+            messageFernet = cipher.encrypt(messageData.encode())
+
             #Adding message to the SQL
-            cursor.execute(f"INSERT INTO chat{recipientIdentifier} (timestamp, isSender, message) VALUES (?, ?, ?)", (messagePayload["timestamp"], int(True), messageData))
+            cursor.execute(f"INSERT INTO chat{recipientIdentifier} (timestamp, isSender, message) VALUES (?, ?, ?)", (messagePayload["timestamp"], identifier, messageFernet))
             conn.commit()
             
         conn.close()   
