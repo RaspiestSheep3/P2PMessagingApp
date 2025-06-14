@@ -19,13 +19,16 @@
       <div class="displayText sidebarElement" id="Settings Icon">
         <i class="fa fa-gear"></i>
       </div>
+      <div class="displayText sidebarElement" id="Key Icon">
+        <i class="fa fa-lock"></i>
+      </div>
     </div>
     <div id="chatlist">
        <input class="input" type="text" placeholder="Search For User" id="searchForUserInput">
       <ul id="chatlistUL">
-        <li class="displayText chatlistElement">John Smith</li>
-        <li class="displayText chatlistElement">Jean Marc</li>
-        <li class="displayText chatlistElement">Family Group Chat</li>
+        <li class="displayText chatlistElement underlineFade">John Smith</li>
+        <li class="displayText chatlistElement underlineFade">Jean Marc</li>
+        <li class="displayText chatlistElement underlineFade">Family Group Chat</li>
       </ul>
       </div>
     <div id="chatHistory">
@@ -45,6 +48,10 @@
         <div class="displayText message Incoming">
           <p>This is another test long message. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Praesent tincidunt magna sed mi euismod, auctor varius nulla interdum. Nunc sit amet justo imperdiet, feugiat odio vel, lobortis massa. Sed ornare lacus in sem egestas, nec pellentesque felis auctor. Nam venenatis at quam ut aliquet. Sed sodales ornare justo sit amet consequat.</p>
         </div>
+      </div>
+      <div id="messagingInput">
+        <textarea  class="displayText input" type="text" placeholder="Write your message here" id="messagingInputField"></textarea>
+        <button class="displayText button underlineFade" id="sendMessageButton">Send</button>
       </div>
     </div>
   </body>

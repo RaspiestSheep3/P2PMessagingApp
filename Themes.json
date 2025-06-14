@@ -1,0 +1,47 @@
+{
+    "Red" : {
+        "background" : "#1d1e21",
+        "main" : "#8d2523",
+        "accent" : "#ff4537"
+    },
+    "Noir" : {
+        "background" : "#1a1a22",
+        "main" : "#a79095",
+        "accent" : "#a79095"  
+    },
+    "Marsh" : {
+        "background" : "#171b1c",
+        "main" : "#5f6e62",
+        "accent" : "#657c6e"  
+    },
+    "Parchment" : {
+        "background" : "#292418",
+        "main" : "#a48d6a",
+        "accent" : "#cdba94"  
+    },
+    "Night" : {
+        "background" : "#010101",
+        "main" : "#8585a0",
+        "accent" : "#fdfdfd" 
+    },
+    "Sea" : {
+        "background" : "#191b1a",
+        "main" : "#579c9a",
+        "accent" : "#99c9b3" 
+    },
+    "Heart" : {
+        "background" : "#480a30",
+        "main" : "#ff327c",
+        "accent" : "#ffdae8" 
+    },
+    "Bee" : {
+        "background" : "#292b30",
+        "main" : "#cfab4a",
+        "accent" : "#cfab4a" 
+    },
+    "Muted" : {
+        "background" : "#333346",
+        "main" : "#8080a4",
+        "accent" : "#e6e6ec" 
+    }
+}
