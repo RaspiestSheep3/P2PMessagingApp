@@ -6,6 +6,11 @@ if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
+//!TEMP - FOR SETTING BACKEND PORT
+const arg = process.argv.find(arg => arg.startsWith('--backendPort='));
+const backendPort = arg ? parseInt(arg.split('=')[1], 10) : 0;
+console.log(`Starting Electron with backendPort = ${backendPort}`);
+
 const createWindow = () => {
   const iconPath = path.join(__dirname, 'icons', 'favicon.ico'); 
 
@@ -54,3 +59,54 @@ app.on('window-all-closed', () => {
 
 // In this file you can include the rest of your app's specific main process
 // code. You can also put them in separate files and import them here.
+var identifier = null;
+
+async function GetDetails(){
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/GetDetails`);
+    if (!response.ok) throw new Error("Network response was not OK");
+    const data = await response.json();
+    
+    console.log("Details fetched:", data);
+    identifier = data["identifier"]    
+
+  } catch (error) {
+      console.error("Fetch error:", error);
+  }
+}
+
+async function GetSavedUsers(){
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/GetSavedUsers`);
+    if (!response.ok) throw new Error("Network response was not OK");
+    const data = await response.json();
+    
+    console.log("Saved Users fetched:", data);
+
+  } catch (error) {
+      console.error("Fetch error:", error);
+  }
+}
+
+async function GetMessages(otherIdentifier){
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/GetMessages/${otherIdentifier}`);
+    if (!response.ok) throw new Error("Network response was not OK");
+    const data = await response.json();
+    
+    console.log("Messages fetched:", data);
+  } catch (error) {
+      console.error("Fetch error:", error);
+  }
+}
+
+async function Init() {
+  await GetDetails();
+  console.debug("GOT DETAILS");
+  await GetSavedUsers();
+  console.debug("GOT SAVED USERS")
+  await GetMessages("B")
+  console.debug("GOT MESSAGES");
+}
+
+Init()

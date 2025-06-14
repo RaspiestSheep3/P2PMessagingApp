@@ -12,8 +12,10 @@ import base64
 import sqlite3
 import re
 import keyring
-from cryptography.fernet import Fernet
+from flask import Flask, jsonify, Response, request
+from flask_cors import CORS
 from datetime import datetime
+from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
@@ -96,7 +98,8 @@ class Peer():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS savedUsers (
                 identifier STRING NOT NULL UNIQUE,
-                publicKey BLOB NOT NULL
+                publicKey BLOB NOT NULL,
+                displayName TEXT NOT NULL
             )
         ''')
 
@@ -201,7 +204,9 @@ class Peer():
                 senderPublicKey = base64.b64decode(senderPublicKey)
                 
                 #Updating SQL
-                cursor.execute("INSERT INTO savedUsers (identifier, publicKey) VALUES (?, ?)", (senderIdentifier, senderPublicKey))
+                cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName) VALUES (?, ?, ?)", (senderIdentifier, senderPublicKey, "TIMMY"))
+                #!"TIMMY" IS TEMP - TO CODE A BETTER SOLN.
+                
                 conn.commit()
                 self.knownUsers[senderPublicKey] = senderPublicKey #Adding to dict
             else:
@@ -245,7 +250,7 @@ class Peer():
             cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS chat{senderIdentifier} (
                 timestamp TEXT NOT NULL,
-                isSender TEXT NOT NULL,
+                senderIdentifier TEXT NOT NULL,
                 message TEXT NOT NULL
             )
             ''')
@@ -282,10 +287,10 @@ class Peer():
             
             #Encrypting the message with Fernet
             cipher = Fernet(self.fernetKey)
-            messageFernet = cipher.encrypt(message.encode())
+            messageFernet = cipher.encrypt(plaintext.encode())
             
             #Adding message to the SQL
-            cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, isSender, message) VALUES (?, ?, ?)", (timestamp, senderIdentifier, messageFernet))
+            cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, message) VALUES (?, ?, ?)", (timestamp, senderIdentifier, messageFernet))
             conn.commit()
     
         conn.close()
@@ -374,7 +379,8 @@ class Peer():
             #Sending message
             #TODO : make proper messaging system
             messageData = b"TEST MESSAGE 123"
-            messagePayload = json.dumps(self.CalculateMessage(AESKey, messageData, sBytes, self.privateKey)).encode()
+            messagePayloadRaw = self.CalculateMessage(AESKey, messageData, sBytes, self.privateKey)
+            messagePayload = json.dumps(messagePayloadRaw).encode()
             self.logger.debug(f"Message Payload Length : {len(messagePayload)}")
             
             outputSocket.send(messagePayload.ljust(self.messagePadLength, b"\0"))
@@ -382,10 +388,10 @@ class Peer():
             #Encrypting message with SQL
             #Encrypting the message with Fernet
             cipher = Fernet(self.fernetKey)
-            messageFernet = cipher.encrypt(messageData.encode())
+            messageFernet = cipher.encrypt(messageData)
 
             #Adding message to the SQL
-            cursor.execute(f"INSERT INTO chat{recipientIdentifier} (timestamp, isSender, message) VALUES (?, ?, ?)", (messagePayload["timestamp"], identifier, messageFernet))
+            cursor.execute(f"INSERT INTO chat{recipientIdentifier} (timestamp, senderIdentifier, message) VALUES (?, ?, ?)", (messagePayloadRaw["timestamp"], identifier, messageFernet))
             conn.commit()
             
         conn.close()   
@@ -406,12 +412,40 @@ class Peer():
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         return {
-        "nonce": base64.b64encode(nonce).decode(), #Doing this because json.dumps doesnt like b""
-        "hmacTag": base64.b64encode(hmacTag).decode(),
-        "signature" : base64.b64encode(signature).decode(),
-        "ciphertext": base64.b64encode(ciphertext).decode(),
-        "timestamp" : timestamp
-    }
+            "nonce": base64.b64encode(nonce).decode(), #Doing this because json.dumps doesnt like b""
+            "hmacTag": base64.b64encode(hmacTag).decode(),
+            "signature" : base64.b64encode(signature).decode(),
+            "ciphertext": base64.b64encode(ciphertext).decode(),
+            "timestamp" : timestamp
+        }
+    
+    def ReturnMessages(self, otherIdentifier):
+        conn = sqlite3.connect(self.databaseName)
+        cursor = conn.cursor()
+        
+        cursor.execute(f"SELECT * FROM chat{otherIdentifier}")
+        rows = cursor.fetchall()
+        
+        cipher = Fernet(self.fernetKey)
+        
+        rows = [[row[0], row[1], cipher.decrypt(row[2]).decode()] for row in rows]
+        
+        conn.close()
+        return rows
+
+    def ReturnSavedUsers(self):
+        conn = sqlite3.connect(self.databaseName)
+        cursor = conn.cursor()
+        
+        cursor.execute(f"SELECT * FROM savedUsers")
+        rows = cursor.fetchall()
+
+        rows = [row[2] for row in rows]
+        
+        conn.close()
+        
+        self.logger.debug(f"USERS : f{rows}")
+        return rows
 
     def GeneratePrime(self, bitLength):
         while True:
@@ -450,8 +484,48 @@ class Peer():
                 return False
         return True
 
+peer = Peer()
+
+#FLASK
+app = Flask(__name__)
+CORS(app)  # Allows cross-origin requests
+
+@app.route('/api/GetDetails', methods=['GET'])
+def GetDetails():
+    try:
+        return jsonify({
+            "identifier" : identifier
+        })
+    
+    except Exception as e:
+        peer.logger.error(f"Error {e} in GetDetails", exc_info=True)
+        return jsonify({"Unexpected error - check logs"}), 500
+
+@app.route('/api/GetSavedUsers', methods=['GET'])
+def GetSavedUsers():
+    try:
+        return jsonify(peer.ReturnSavedUsers())
+    
+    except Exception as e:
+        peer.logger.error(f"Error {e} in GetSavedUsers", exc_info=True)
+        return jsonify({"Unexpected error - check logs"}), 500
+
+@app.route('/api/GetMessages/<otherIdentifier>', methods=['GET'])
+def GetMessages(otherIdentifier):
+    try:
+        return jsonify(peer.ReturnMessages(otherIdentifier))
+    
+    except Exception as e:
+        peer.logger.error(f"Error {e} in GetMessages", exc_info=True)
+        return jsonify({"Unexpected error - check logs"}), 500
+
+
 if __name__ == "__main__":
-    peer = Peer()
+    #Starting Website
+    frontendPort = int(input("FRONTEND PORT : "))
+    peer.logger.debug("STARTING WEBSITE")
+    threading.Thread(target = app.run, kwargs={"port": int(frontendPort), "debug": False}).start()
+    
     peer.logger.debug("STARTING UP")
     peer.Start()
     threading.Thread(target = peer.WaitForIncomingRequests, daemon=False).start()
