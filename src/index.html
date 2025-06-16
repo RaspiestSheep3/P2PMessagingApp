@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" data-page="chat"/>
     <meta charset="UTF-8" />
     <title>___ Messaging</title>
     <!--Font Bits-->
@@ -12,14 +12,15 @@
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css">
   </head>
   <body>
+
     <div id="sidebar">
-      <div class="displayText sidebarElement" id="Speech Icon">
+      <div class="displayText sidebarElement" id="chatIcon">
         <i class="fa fa-comments"></i>
       </div>
-      <div class="displayText sidebarElement" id="Settings Icon">
+      <div class="displayText sidebarElement" id="settingsIcon">
         <i class="fa fa-gear"></i>
       </div>
-      <div class="displayText sidebarElement" id="Key Icon">
+      <div class="displayText sidebarElement" id="keyIcon">
         <i class="fa fa-lock"></i>
       </div>
     </div>
@@ -30,10 +31,10 @@
         <li class="displayText chatlistElement underlineFade">Jean Marc</li>
         <li class="displayText chatlistElement underlineFade">Family Group Chat</li>
       </ul>
-      </div>
+    </div>
     <div id="chatHistory">
       <div class="displayText" id="contactBanner">
-        <h1>John Smith</h1>
+        <h1 id="contactBannerText">John Smith</h1>
       </div>
       <div id="chat">
         <div class="displayText message messageIncoming">
@@ -54,5 +55,7 @@
         <button class="displayText button underlineFade" id="sendMessageButton">Send</button>
       </div>
     </div>
+
+  <script src="renderer.js"></script>
   </body>
 </html>

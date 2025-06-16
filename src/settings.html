@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1" data-page="settings"/>
+    <meta charset="UTF-8" />
+    <title>___ Messaging</title>
+    <!--Font Bits-->
+    <link rel="stylesheet" href="index.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css">
+  </head>
+  <body>
+
+    <div id="sidebar">
+      <div class="displayText sidebarElement" id="chatIcon">
+        <i class="fa fa-comments"></i>
+      </div>
+      <div class="displayText sidebarElement" id="settingsIcon">
+        <i class="fa fa-gear"></i>
+      </div>
+      <div class="displayText sidebarElement" id="keyIcon">
+        <i class="fa fa-lock"></i>
+      </div>
+    </div>
+    <div id="settingsDisplay">
+        <div class="settingsSection" id="themeSettings">
+            <h1 class="displayText" id="themeSettingsLabel">Themes</h1>
+            <div id="themeButtons">
+            </div>
+        </div>
+    </div>
+  <script src="renderer.js"></script>
+  </body>
+</html>

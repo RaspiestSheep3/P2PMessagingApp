@@ -440,7 +440,7 @@ class Peer():
         cursor.execute(f"SELECT * FROM savedUsers")
         rows = cursor.fetchall()
 
-        rows = [row[2] for row in rows]
+        rows = [[row[0], row[2]] for row in rows]
         
         conn.close()
         
@@ -519,6 +519,16 @@ def GetMessages(otherIdentifier):
         peer.logger.error(f"Error {e} in GetMessages", exc_info=True)
         return jsonify({"Unexpected error - check logs"}), 500
 
+@app.route('/api/GetThemes/', methods=['GET'])
+def GetThemes():
+    try:
+        with open("Themes.json", "r") as fileHandle:
+            themeData = json.load(fileHandle)
+        return themeData
+    
+    except Exception as e:
+        peer.logger.error(f"Error {e} in GetThemes", exc_info=True)
+        return jsonify({"Unexpected error - check logs"}), 500
 
 if __name__ == "__main__":
     #Starting Website
