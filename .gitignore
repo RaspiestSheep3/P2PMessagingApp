@@ -94,3 +94,8 @@ out/
 *.pem
 *.key
 *.db
+
+*.json
+!Themes.json
+!package.json
+!package-lock.json

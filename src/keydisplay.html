@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1" data-page="chat"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1" data-page="keydisplay"/>
     <meta charset="UTF-8" />
     <title>___ Messaging</title>
     <!--Font Bits-->
@@ -24,23 +24,14 @@
         <i class="fa fa-lock"></i>
       </div>
     </div>
-    <div id="chatlist">
-       <input class="input" type="text" placeholder="Search For User" id="searchForUserInput">
-      <ul id="chatlistUL">
-      </ul>
-    </div>
-    <div id="chatHistory">
-      <div class="displayText" id="contactBanner">
-        <h1 id="contactBannerText"></h1>
-      </div>
-      <div id="chat">
-      </div>
-      <div id="messagingInput">
-        <textarea  class="displayText input" type="text" placeholder="Write your message here" id="messagingInputField"></textarea>
-        <button class="displayText button underlineFade" id="sendMessageButton">Send</button>
+    <div id="displayInfo">
+      <div id="selfInfo">
+        <h1 class="displayText" id="selfInfoHeader">Your Info</h1>
+        <h1 class="displayText" id="selfIdentifierDisplay">Identifier : A</h1>
+        <h1 class="displayText" id="selfDisplayNameDisplay">Display Name : John</h1>
+        <h1 class="displayText" id="selfKeyDisplay">Public Key : abcd12345</h1>
       </div>
     </div>
-
   <script src="renderer.js"></script>
   </body>
 </html>

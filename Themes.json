@@ -43,5 +43,10 @@
         "background" : "#333346",
         "main" : "#8080a4",
         "accent" : "#e6e6ec" 
+    },
+    "Sunset" : {
+        "background" : "#08141e",
+        "main" : "#c3a38a",
+        "accent" : "#997577"
     }
 }

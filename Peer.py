@@ -26,6 +26,9 @@ from cryptography.exceptions import InvalidSignature
 #!TEMP - MAKE BETTER SYSTEM FOR IDENTIFICATION
 identifier = input("PEER IDENTIFIER : ")
 
+#!TEMP - MAKE BETTER SYSTEM FOR DISPLAY NAMES
+displayName = input("DISPLAY NAME : ")
+
 #!TEMP - MAKE BETTER WAY TO SET LISTEN PORT
 incomingConnectionPortGlobal = int(input("INCOMING CONNECTION PORT : "))
 
@@ -490,13 +493,30 @@ peer = Peer()
 app = Flask(__name__)
 CORS(app)  # Allows cross-origin requests
 
+peerDetailsFilename = f"Peer{identifier}Details.json"
+
+#Making sure we have a peerDetailsFilename file
+if not os.path.exists(peerDetailsFilename):
+    with open(peerDetailsFilename, "w") as fileHandle:
+        json.dump({"theme" : ""}, fileHandle, indent=4)
+
 @app.route('/api/GetDetails', methods=['GET'])
 def GetDetails():
     try:
-        return jsonify({
-            "identifier" : identifier
-        })
-    
+        publicKeyDisplay = peer.publicKey.public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw
+                )
+        
+        with open(peerDetailsFilename, "r") as fileHandle:
+            details = json.load(fileHandle)
+            return jsonify({
+                "identifier" : identifier,
+                "theme" : details["theme"],
+                "publicKey" : base64.b64encode(publicKeyDisplay).decode(),
+                "displayName" : displayName
+            })
+        
     except Exception as e:
         peer.logger.error(f"Error {e} in GetDetails", exc_info=True)
         return jsonify({"Unexpected error - check logs"}), 500
@@ -529,6 +549,17 @@ def GetThemes():
     except Exception as e:
         peer.logger.error(f"Error {e} in GetThemes", exc_info=True)
         return jsonify({"Unexpected error - check logs"}), 500
+
+@app.route('/api/Post/SetTheme', methods=['POST'])
+def SetTheme():
+    content = request.json  # Get JSON from the request body
+    with open(peerDetailsFilename, "r") as fileHandle:
+        details = json.load(fileHandle)
+    details["theme"] = content["newTheme"]
+    with open(peerDetailsFilename, "w") as fileHandle:
+        json.dump(details, fileHandle, indent=4)
+        
+    return jsonify({"status" : "success"})
 
 if __name__ == "__main__":
     #Starting Website

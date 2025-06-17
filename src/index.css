@@ -199,8 +199,8 @@ body {
 
 /*Settings*/
 #settingsDisplay{
-  width : 90%;
-  height : 95%;
+  width : 94%;
+  height : 97%;
   border: 3px solid var(--accentColour);
   border-radius: 20px;
   display: flex;
@@ -219,4 +219,27 @@ body {
   padding : 5px 10px;
   margin : 5px;
   font-size: 15px;
+}
+
+/*Key Display*/
+#displayInfo {
+  width : 94%;
+  height : 97%;
+  border: 3px solid var(--accentColour);
+  border-radius: 20px;
+}
+
+#selfInfo {
+  text-align: center;
+  justify-content: center;
+  align-items: center;
+  border: 3px solid var(--mainColour);
+  border-radius: 20px;
+  margin : 5px;
+  font-size: 10px;
+}
+
+#selfInfoHeader {
+  text-decoration: underline;
+  font-size: 30px;
 }

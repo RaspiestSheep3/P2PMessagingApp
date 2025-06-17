@@ -3,6 +3,12 @@ let savedUsers = null;
 let savedUsersMap = null;
 let messages = null;
 let themes = null;
+let currentTheme = null;
+let publicKey = null;
+let displayName = null;
+
+//Consts
+const stylesheet = document.documentElement.style;
 
 //Display Variables
 let maxThemeButtonsInRow = 4;
@@ -15,7 +21,10 @@ async function GetDetails() {
     const data = await response.json();
     
     console.log("Details fetched:", data);
-    identifier = data["identifier"]    
+    identifier = data["identifier"]   
+    currentTheme = data["theme"] 
+    publicKey = data["publicKey"]
+    displayName = data["displayName"]
 
   } catch (error) {
       console.error("Fetch error:", error);
@@ -31,6 +40,11 @@ function SetSidebar() {
     //Settings page
     document.getElementById('settingsIcon').addEventListener('click', () => {
         window.electronAPI.navigateTo('src/settings.html');
+    });
+
+    //Key Display page
+    document.getElementById('keyIcon').addEventListener('click', () => {
+        window.electronAPI.navigateTo('src/keydisplay.html');
     });
 }
 
@@ -104,6 +118,34 @@ async function GetThemes() {
   }
 }
 
+function UpdateCSSTheme(newTheme) {
+  //Updating CSS
+  let themeValues = themes[newTheme];
+  stylesheet.setProperty("--backgroundColour", themeValues["background"]);
+  stylesheet.setProperty("--mainColour", themeValues["main"]);
+  stylesheet.setProperty("--accentColour", themeValues["accent"]);
+}
+
+async function SetTheme(newTheme) {
+ try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/Post/SetTheme`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({"newTheme" : newTheme})
+    });
+
+    const data = await response.json();
+    console.log("POST Response in SetTheme:", data);
+    
+  } catch (error) {
+    console.error("Error posting data:", error);
+  }
+
+  UpdateCSSTheme(newTheme);
+}
+
 function SetThemeButtons() {
   //Goal is to make an adaptable system - i / a user can simply add more stuff to the Themes.json 
   let themeButtonsArea = document.getElementById("themeButtons");
@@ -116,12 +158,22 @@ function SetThemeButtons() {
       themeButton.className = "displayText button themeButton underlineFade";
       themeButton.id = themeButtonData;
       themeButton.textContent = themeButtonData;
+      themeButton.addEventListener("click", () => {
+        console.log(`${themeButton.id} SELECTED`);
+        SetTheme(themeButton.id);
+      })
       themeRow.appendChild(themeButton);
       console.debug(themeButtonData);
     });
     
     themeButtonsArea.appendChild(themeRow);
   }
+}
+
+function DisplayKeyData() {
+  document.getElementById("selfIdentifierDisplay").textContent = `Identifier : ${identifier}`;
+  document.getElementById("selfDisplayNameDisplay").textContent = `Display Name : ${displayName}`;
+  document.getElementById("selfKeyDisplay").textContent = `Public Key : ${publicKey}`;
 }
 
 async function InitChat() {
@@ -138,6 +190,10 @@ async function InitChat() {
     console.debug("GOT MESSAGES");
     DisplayMessages(messages, "B");
     console.debug("DISPLAYING MESSAGES")
+    themes = await GetThemes();
+    console.debug("GOT THEMES");
+    UpdateCSSTheme(currentTheme);
+    console.debug("SET CURRENT THEME");
 }
 
 async function InitSettings(){
@@ -147,10 +203,27 @@ async function InitSettings(){
     console.debug("SET SIDEBAR");
     themes = await GetThemes();
     console.debug("GOT THEMES");
+    UpdateCSSTheme(currentTheme);
+    console.debug("SET CURRENT THEME");
     SetThemeButtons();
+    console.log("SET THEME BUTTONS");
+}
+
+async function InitKeyDisplay(){
+    await GetDetails();
+    console.debug("GOT DETAILS");
+    SetSidebar();
+    console.debug("SET SIDEBAR");
+    themes = await GetThemes();
+    console.debug("GOT THEMES");
+    UpdateCSSTheme(currentTheme);
+    console.debug("SET CURRENT THEME");
+    DisplayKeyData();
+    console.debug("SET KEY DATA")
 }
 
 const page = document.querySelector('meta[name="viewport"]').dataset.page;
 console.log(`PAGE : ${page}`);
 if(page === "chat") InitChat();
 else if(page === "settings") InitSettings();
+else if(page === "keydisplay") InitKeyDisplay();
