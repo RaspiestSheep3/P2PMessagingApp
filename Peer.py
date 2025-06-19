@@ -450,6 +450,16 @@ class Peer():
         self.logger.debug(f"USERS : f{rows}")
         return rows
 
+    def GetDetailsOfUser(self, userID):
+        conn = sqlite3.connect(self.databaseName)
+        cursor = conn.cursor()
+        
+        cursor.execute(f"SELECT * FROM savedUsers WHERE identifier = ?", (userID,))
+        row = cursor.fetchone()
+
+        conn.close()
+        return row
+
     def GeneratePrime(self, bitLength):
         while True:
             # Generate random odd number of desired bit length
@@ -560,6 +570,20 @@ def SetTheme():
         json.dump(details, fileHandle, indent=4)
         
     return jsonify({"status" : "success"})
+
+@app.route('/api/GetDetailsOfOtherUser/<otherUserID>', methods=['GET'])
+def GetDetailsOfOtherUser(otherUserID):
+    details = peer.GetDetailsOfUser(otherUserID)
+    detailsKey = ed25519.Ed25519PublicKey.from_public_bytes(details[1])
+    keyBytes = detailsKey.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw
+    )
+    return jsonify({
+        "identifier" : details[0],
+        "publicKey" : base64.b64encode(keyBytes).decode(),
+        "displayName" : details[2] 
+    })
 
 if __name__ == "__main__":
     #Starting Website

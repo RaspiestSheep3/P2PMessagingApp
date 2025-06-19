@@ -27,9 +27,30 @@
     <div id="displayInfo">
       <div id="selfInfo">
         <h1 class="displayText" id="selfInfoHeader">Your Info</h1>
-        <h1 class="displayText" id="selfIdentifierDisplay">Identifier : A</h1>
-        <h1 class="displayText" id="selfDisplayNameDisplay">Display Name : John</h1>
-        <h1 class="displayText" id="selfKeyDisplay">Public Key : abcd12345</h1>
+        <h1 class="displayText selfInfoText" id="selfDisplayNameDisplay">Display Name : </h1>
+        <h1 class="displayText selfInfoText" id="selfIdentifierDisplay">Identifier : </h1>
+        <h1 class="displayText selfInfoText" id="selfKeyDisplay">Public Key : </h1>
+      </div>
+      <div id="othersKeyDisplayArea">
+        <div id="otherUsersList">
+          <h1 class="displayText" id="otherUsersListHeader">Known Users</h1>
+          <input class="input" type="text" placeholder="Search For User" id="searchForUserInput">
+          <ul id="otherUsersListUL">
+            <li class="otherUsersListLi displayText underlineFade" data-identifier="A">Apple</li>
+            <li class="otherUsersListLi displayText underlineFade" data-identifier="B">Bob</li>
+            <li class="otherUsersListLi displayText underlineFade" data-identifier="c">Charlie</li>
+          </ul>
+        </div> 
+        <div id="otherUserOverview">
+          <div id="otherUserOverviewDetails">
+            <h1 class = "displayText otherUserDisplayText" id="otherUserOverviewDisplayName">Display Name : </h1>
+            <h1 class = "displayText otherUserDisplayText" id="otherUserOverviewIdentifier"> Identifier : </h1>
+            <h1 class = "displayText otherUserDisplayText" id="otherUserOverviewPublicKey">  Public Key : </h1>
+          </div>
+          <h1 class = "displayText" id="otherUserOverviewRecentMessagesHeader">Latest Messages</h1>
+          <div id="otherUserOverviewRecentMessages">
+          </div>
+        </div>
       </div>
     </div>
   <script src="renderer.js"></script>

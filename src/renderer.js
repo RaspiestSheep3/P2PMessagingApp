@@ -75,16 +75,22 @@ async function GetMessages(otherIdentifier) {
   }
 }
 
-function DisplaySetUsers() {
-  let chatListUL = document.getElementById("chatlistUL");
+function DisplaySetUsers(id) {
+  let chatListUL = document.getElementById(id);
   chatListUL.innerHTML = "";
+
+  let savedUsersLi = [];
+
   savedUsers.forEach(savedUser => {
     const li = document.createElement("li");
     li.className = "displayText chatlistElement underlineFade";
     li.id = savedUser[0];
     li.textContent = savedUser[1];
     chatListUL.appendChild(li);
+    savedUsersLi.push(li);
   });
+
+  return savedUsersLi;
 }
 
 function DisplayMessages(messagesToDisplay, messagerIdentifier) {
@@ -176,50 +182,101 @@ function DisplayKeyData() {
   document.getElementById("selfKeyDisplay").textContent = `Public Key : ${publicKey}`;
 }
 
+async function DisplayOtherUserDetails(id) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/GetDetailsOfOtherUser/${id}`);
+    if (!response.ok) throw new Error("Network response was not OK");
+    const data = await response.json();
+    
+    console.log("Other User Details fetched:", data);
+
+    document.getElementById("otherUserOverviewDisplayName").textContent = `Display Name : ${data.displayName}`;
+    document.getElementById("otherUserOverviewIdentifier").textContent = `Identifier : ${data.identifier}`;
+    document.getElementById("otherUserOverviewPublicKey").textContent = `Public Key : ${data.publicKey}`;
+
+  } catch (error) {
+    console.error("Fetch error:", error);
+  }
+}
+
+function UserSearchBar(ul, searchBar) {
+  searchBar.addEventListener("input", () => {
+    let filter = searchBar.value.toUpperCase();
+    let liList = ul.getElementsByTagName('li');
+    if(filter.trim() !== ""){
+      for (let i = 0; i < liList.length; i++) {
+        if (liList[i].textContent.toUpperCase().indexOf(filter) > -1) {
+          liList[i].style.display = "";
+        } else {
+          liList[i].style.display = "none";
+        }
+      }
+    }
+    else {
+      for (let i = 0; i < liList.length; i++) {
+        liList[i].style.display = "";
+      }
+    }
+  });
+}
+
 async function InitChat() {
-    await GetDetails();
-    console.debug("GOT DETAILS");
-    SetSidebar();
-    console.debug("SET SIDEBAR");
-    savedUsers = await GetSavedUsers();
-    savedUsersMap = new Map(savedUsers);
-    console.debug("GOT SAVED USERS");
-    DisplaySetUsers();
-    console.debug("DISPLAYED SAVED USERS")
-    messages = await GetMessages("B");
-    console.debug("GOT MESSAGES");
-    DisplayMessages(messages, "B");
-    console.debug("DISPLAYING MESSAGES")
-    themes = await GetThemes();
-    console.debug("GOT THEMES");
-    UpdateCSSTheme(currentTheme);
-    console.debug("SET CURRENT THEME");
+  await GetDetails();
+  console.debug("GOT DETAILS");
+  SetSidebar();
+  console.debug("SET SIDEBAR");
+  savedUsers = await GetSavedUsers();
+  savedUsersMap = new Map(savedUsers);
+  console.debug("GOT SAVED USERS");
+  DisplaySetUsers("chatlistUL");
+  console.debug("DISPLAYED SAVED USERS")
+  messages = await GetMessages("B");
+  console.debug("GOT MESSAGES");
+  DisplayMessages(messages, "B");
+  console.debug("DISPLAYING MESSAGES");
+  UserSearchBar(document.getElementById("chatlistUL"), document.getElementById("searchForUserInput"));
+  console.debug("SET SEARCH BAR");
+  themes = await GetThemes();
+  console.debug("GOT THEMES");
+  UpdateCSSTheme(currentTheme);
+  console.debug("SET CURRENT THEME");
 }
 
 async function InitSettings(){
-    await GetDetails();
-    console.debug("GOT DETAILS");
-    SetSidebar();
-    console.debug("SET SIDEBAR");
-    themes = await GetThemes();
-    console.debug("GOT THEMES");
-    UpdateCSSTheme(currentTheme);
-    console.debug("SET CURRENT THEME");
-    SetThemeButtons();
-    console.log("SET THEME BUTTONS");
+  await GetDetails();
+  console.debug("GOT DETAILS");
+  SetSidebar();
+  console.debug("SET SIDEBAR");
+  themes = await GetThemes();
+  console.debug("GOT THEMES");
+  UpdateCSSTheme(currentTheme);
+  console.debug("SET CURRENT THEME");
+  SetThemeButtons();
+  console.log("SET THEME BUTTONS");
 }
 
 async function InitKeyDisplay(){
-    await GetDetails();
-    console.debug("GOT DETAILS");
-    SetSidebar();
-    console.debug("SET SIDEBAR");
-    themes = await GetThemes();
-    console.debug("GOT THEMES");
-    UpdateCSSTheme(currentTheme);
-    console.debug("SET CURRENT THEME");
-    DisplayKeyData();
-    console.debug("SET KEY DATA")
+  await GetDetails();
+  console.debug("GOT DETAILS");
+  SetSidebar();
+  console.debug("SET SIDEBAR");
+  themes = await GetThemes();
+  console.debug("GOT THEMES");
+  UpdateCSSTheme(currentTheme);
+  console.debug("SET CURRENT THEME");
+  DisplayKeyData();
+  console.debug("SET KEY DATA");
+  savedUsers = await GetSavedUsers();
+  console.debug("GOT SAVED USERS");
+  UserSearchBar(document.getElementById("otherUsersListUL"), document.getElementById("searchForUserInput"));
+  console.debug("SET SEARCH BAR");
+  
+  let usersLiList = DisplaySetUsers("otherUsersListUL");
+  usersLiList.forEach(userLi => {
+    userLi.addEventListener('click', () => {
+      DisplayOtherUserDetails(userLi.id);
+    });
+  });
 }
 
 const page = document.querySelector('meta[name="viewport"]').dataset.page;

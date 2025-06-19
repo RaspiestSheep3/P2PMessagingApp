@@ -89,7 +89,7 @@ body {
 
 .input {
   border : 2px solid var(--accentColour);
-  border-radius: 20px;
+  border-radius: 10px;
   background-color: var(--backgroundColour);
   text-align: center;
   color: var(--mainColour);
@@ -156,10 +156,11 @@ body {
 .chatlistElement{
   text-align: center;
   border: 2px solid var(--mainColour);
-  border-radius: 20px;
+  border-radius: 10px;
   padding: 5px;
   margin: 5px;
   cursor : pointer;
+  color : var(--accentColour);
 }
 
 .sidebarElement {
@@ -184,6 +185,7 @@ body {
   height : 50px;
   text-align: center;
   font-size: 15px;
+  resize: none;
 }
 #messagingInputField::-webkit-scrollbar { 
   display: none; 
@@ -219,6 +221,9 @@ body {
   padding : 5px 10px;
   margin : 5px;
   font-size: 15px;
+  border-radius: 10px;
+  border-color: var(--mainColour);
+  color : var(--accentColour);
 }
 
 /*Key Display*/
@@ -233,7 +238,7 @@ body {
   text-align: center;
   justify-content: center;
   align-items: center;
-  border: 3px solid var(--mainColour);
+  border: 2px solid var(--mainColour);
   border-radius: 20px;
   margin : 5px;
   font-size: 10px;
@@ -242,4 +247,84 @@ body {
 #selfInfoHeader {
   text-decoration: underline;
   font-size: 30px;
+}
+
+#othersKeyDisplayArea {
+  display: flex;
+  flex-direction: row;
+  height: 79.5%;
+  border: 2px solid var(--mainColour);
+  border-radius: 20px;
+  margin : 5px;
+  align-items: center;
+  justify-content: center;
+}
+
+#otherUsersList {
+  /*border: 2px solid var(--accentColour);
+  border-radius: 20px; */
+  width : 45%;
+  height : 90%;
+  padding : 10px;
+  margin: 10px;
+  text-align: center;
+}
+
+#otherUsersListUL {
+  list-style: none;
+  /*border: 2px solid var(--accentColour);
+  border-radius: 20px; */
+  height: 80%;
+  overflow-y: scroll;
+}
+
+#otherUsersListUL::-webkit-scrollbar { 
+  display: none;
+}
+
+.otherUsersListLi{
+  border: 2px solid var(--mainColour);
+  border-radius: 10px;
+  margin : 3px;
+  cursor: pointer;
+  padding: 3px;
+  color : var(--accentColour);
+}
+
+#otherUserOverview {
+  /*border: 2px solid var(--accentColour);
+  border-radius: 20px; */
+  width : 45%;
+  height : 90%;
+  padding : 10px;
+  margin: 10px;
+}
+
+#otherUserOverviewRecentMessagesHeader {
+  text-align: center;
+  margin-top: 0px;
+  color: var(--accentColour);
+}
+
+#otherUserOverviewRecentMessages {
+  border: 2px solid var(--accentColour);
+  border-radius: 40px;
+  height: 68%;
+ overflow-y: scroll;
+}
+
+#otherUserOverviewRecentMessages::-webkit-scrollbar { 
+  display: none;
+}
+#otherUserOverviewDetails {
+  height: 25%;
+}
+
+.otherUserDisplayText {
+  font-size: 20px;
+  color : var(--accentColour);
+}
+
+.selfInfoText {
+  color : var(--accentColour);
 }
