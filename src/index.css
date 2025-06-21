@@ -308,7 +308,7 @@ body {
 
 #otherUserOverviewRecentMessages {
   border: 2px solid var(--accentColour);
-  border-radius: 40px;
+  border-radius: 30px;
   height: 68%;
  overflow-y: scroll;
 }

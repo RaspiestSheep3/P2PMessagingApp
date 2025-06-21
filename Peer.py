@@ -207,8 +207,7 @@ class Peer():
                 senderPublicKey = base64.b64decode(senderPublicKey)
                 
                 #Updating SQL
-                cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName) VALUES (?, ?, ?)", (senderIdentifier, senderPublicKey, "TIMMY"))
-                #!"TIMMY" IS TEMP - TO CODE A BETTER SOLN.
+                cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName) VALUES (?, ?, ?)", (senderIdentifier, senderPublicKey, details["displayName"]))
                 
                 conn.commit()
                 self.knownUsers[senderPublicKey] = senderPublicKey #Adding to dict
@@ -322,7 +321,7 @@ class Peer():
             payload = json.dumps({"p" : p, "g" : g, "A" : A}).encode()
             
             #Sending a session request and the length of the payload
-            outputSocket.send(json.dumps({"type" : "sessionRequest", "identifier" : identifier ,"DHEPayloadLength" : math.ceil(len(payload) / 256) * 256}).encode().ljust(128, b"\0"))
+            outputSocket.send(json.dumps({"type" : "sessionRequest", "identifier" : identifier ,"DHEPayloadLength" : math.ceil(len(payload) / 256) * 256, "displayName" : displayName}).encode().ljust(128, b"\0"))
             self.logger.debug("SENT REQUEST + DETAILS")
             
             response = json.loads(outputSocket.recv(128).rstrip(b"\0").decode())
@@ -381,7 +380,7 @@ class Peer():
             
             #Sending message
             #TODO : make proper messaging system
-            messageData = b"TEST MESSAGE 123"
+            messageData = b"TEST MESSAGE" + datetime.now().strftime("%Y-%m-%d %H:%M:%S").encode('utf-8')
             messagePayloadRaw = self.CalculateMessage(AESKey, messageData, sBytes, self.privateKey)
             messagePayload = json.dumps(messagePayloadRaw).encode()
             self.logger.debug(f"Message Payload Length : {len(messagePayload)}")
@@ -422,17 +421,30 @@ class Peer():
             "timestamp" : timestamp
         }
     
-    def ReturnMessages(self, otherIdentifier):
+    def ReturnMessages(self, otherIdentifier, amount, sort, reversed):
         conn = sqlite3.connect(self.databaseName)
         cursor = conn.cursor()
         
-        cursor.execute(f"SELECT * FROM chat{otherIdentifier}")
-        rows = cursor.fetchall()
+        if(sort == "asc"):
+            cursor.execute(f"SELECT * FROM chat{otherIdentifier} ORDER BY timestamp ASC")
+            self.logger.debug("ASC")
+        else:
+            cursor.execute(f"SELECT * FROM chat{otherIdentifier} ORDER BY timestamp DESC")
+            self.logger.debug("DESC")
+        if(int(amount) == 0):
+            rows = cursor.fetchall()
+        else:
+            rows = cursor.fetchmany(amount)
         
         cipher = Fernet(self.fernetKey)
         
         rows = [[row[0], row[1], cipher.decrypt(row[2]).decode()] for row in rows]
         
+        if(reversed == "true" and sort=="asc") or (reversed=="false" and sort=="desc"):
+            rows = rows[::-1] #Making sure its in the right order
+
+        self.logger.debug(f"ROWS REVERSED: {rows}")
+
         conn.close()
         return rows
 
@@ -508,7 +520,7 @@ peerDetailsFilename = f"Peer{identifier}Details.json"
 #Making sure we have a peerDetailsFilename file
 if not os.path.exists(peerDetailsFilename):
     with open(peerDetailsFilename, "w") as fileHandle:
-        json.dump({"theme" : ""}, fileHandle, indent=4)
+        json.dump({"theme" : "Red"}, fileHandle, indent=4)
 
 @app.route('/api/GetDetails', methods=['GET'])
 def GetDetails():
@@ -543,7 +555,13 @@ def GetSavedUsers():
 @app.route('/api/GetMessages/<otherIdentifier>', methods=['GET'])
 def GetMessages(otherIdentifier):
     try:
-        return jsonify(peer.ReturnMessages(otherIdentifier))
+        peer.logger.debug(f"GetMessagesRaw : {otherIdentifier}")
+        amount = int(request.args.get('amount', 0)) #Defaults to 0
+        sort = request.args.get('sort', 'asc') #Defaults to ascending
+        reversed = request.args.get('reversed', 'false') #Defaults to false
+        peer.logger.debug(f"GetMessages : {otherIdentifier} {amount} {sort} {reversed}")
+        
+        return jsonify(peer.ReturnMessages(otherIdentifier, amount, sort, reversed))
     
     except Exception as e:
         peer.logger.error(f"Error {e} in GetMessages", exc_info=True)

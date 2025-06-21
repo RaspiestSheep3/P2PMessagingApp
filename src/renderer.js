@@ -12,7 +12,10 @@ const stylesheet = document.documentElement.style;
 
 //Display Variables
 let maxThemeButtonsInRow = 4;
-backendPort = 5000;
+
+//!TEMP - FOR TESTING MULTIPLE USERS
+const backendPort = window.myAPI.backendPort;
+console.log(`RUNNING ON BACKEND PORT ${backendPort}`);
 
 async function GetDetails() {
   try {
@@ -62,9 +65,10 @@ async function GetSavedUsers() {
   }
 }
 
-async function GetMessages(otherIdentifier) {
+async function GetMessages(otherIdentifier, amount, sort, reversed) {
   try {
-    const response = await fetch(`http://127.0.0.1:${backendPort}/api/GetMessages/${otherIdentifier}`);
+    console.log(`FETCHING IN GET MESSAGES : http://127.0.0.1:${backendPort}/api/GetMessages/${otherIdentifier}?amount=${amount}&sort=${sort}&reversed=${reversed}`);
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/GetMessages/${otherIdentifier}?amount=${amount}&sort=${sort}&reversed=${reversed}`);
     if (!response.ok) throw new Error("Network response was not OK");
     const data = await response.json();
     console.log("Messages fetched:", data);
@@ -75,7 +79,15 @@ async function GetMessages(otherIdentifier) {
   }
 }
 
-function DisplaySetUsers(id) {
+async function GetDisplayMessages(id, chatID, banner, amount=0, sort="asc", reversed="false") {
+  console.debug(`DISPLAYING MESSAGES FOR ${id}`);
+  messages = await GetMessages(id, amount, sort, reversed);
+  console.debug("GOT MESSAGES");
+  DisplayMessages(messages, id, chatID, banner);
+  console.debug("DISPLAYING MESSAGES");
+}
+
+function DisplaySetUsers(id, chatID, banner="", amount = 0, sort = "asc" ,reversed = "false") {
   let chatListUL = document.getElementById(id);
   chatListUL.innerHTML = "";
 
@@ -86,6 +98,7 @@ function DisplaySetUsers(id) {
     li.className = "displayText chatlistElement underlineFade";
     li.id = savedUser[0];
     li.textContent = savedUser[1];
+    li.addEventListener("click",() => GetDisplayMessages(li.id, chatID, banner, amount, sort, reversed));
     chatListUL.appendChild(li);
     savedUsersLi.push(li);
   });
@@ -93,8 +106,8 @@ function DisplaySetUsers(id) {
   return savedUsersLi;
 }
 
-function DisplayMessages(messagesToDisplay, messagerIdentifier) {
-    let chat = document.getElementById("chat");
+function DisplayMessages(messagesToDisplay, messagerIdentifier, chatID, banner="") {
+    let chat = document.getElementById(chatID);
     chat.innerHTML = "";
     messagesToDisplay.forEach(messageToDisplay => {
         const div = document.createElement("div");
@@ -106,8 +119,10 @@ function DisplayMessages(messagesToDisplay, messagerIdentifier) {
         chat.appendChild(div);
     });
 
-    let messageLabel = document.getElementById("contactBannerText");
-    messageLabel.textContent = savedUsersMap.get(messagerIdentifier);
+    if(banner !== "") {
+      let messageLabel = document.getElementById(banner);
+      messageLabel.textContent = savedUsersMap.get(messagerIdentifier);
+    }
 }
 
 async function GetThemes() {
@@ -127,6 +142,7 @@ async function GetThemes() {
 function UpdateCSSTheme(newTheme) {
   //Updating CSS
   let themeValues = themes[newTheme];
+  console.log(`THEME VALUES : ${themeValues}, ${newTheme}`);
   stylesheet.setProperty("--backgroundColour", themeValues["background"]);
   stylesheet.setProperty("--mainColour", themeValues["main"]);
   stylesheet.setProperty("--accentColour", themeValues["accent"]);
@@ -167,7 +183,7 @@ function SetThemeButtons() {
       themeButton.addEventListener("click", () => {
         console.log(`${themeButton.id} SELECTED`);
         SetTheme(themeButton.id);
-      })
+      });
       themeRow.appendChild(themeButton);
       console.debug(themeButtonData);
     });
@@ -228,12 +244,8 @@ async function InitChat() {
   savedUsers = await GetSavedUsers();
   savedUsersMap = new Map(savedUsers);
   console.debug("GOT SAVED USERS");
-  DisplaySetUsers("chatlistUL");
+  DisplaySetUsers("chatlistUL", "chat", "contactBannerText");
   console.debug("DISPLAYED SAVED USERS")
-  messages = await GetMessages("B");
-  console.debug("GOT MESSAGES");
-  DisplayMessages(messages, "B");
-  console.debug("DISPLAYING MESSAGES");
   UserSearchBar(document.getElementById("chatlistUL"), document.getElementById("searchForUserInput"));
   console.debug("SET SEARCH BAR");
   themes = await GetThemes();
@@ -261,17 +273,18 @@ async function InitKeyDisplay(){
   SetSidebar();
   console.debug("SET SIDEBAR");
   themes = await GetThemes();
-  console.debug("GOT THEMES");
+  console.debug(`GOT THEMES - CURRENT THEME : ${currentTheme}`);
   UpdateCSSTheme(currentTheme);
   console.debug("SET CURRENT THEME");
   DisplayKeyData();
   console.debug("SET KEY DATA");
   savedUsers = await GetSavedUsers();
+  savedUsersMap = new Map(savedUsers);
   console.debug("GOT SAVED USERS");
   UserSearchBar(document.getElementById("otherUsersListUL"), document.getElementById("searchForUserInput"));
   console.debug("SET SEARCH BAR");
   
-  let usersLiList = DisplaySetUsers("otherUsersListUL");
+  let usersLiList = DisplaySetUsers("otherUsersListUL", "otherUserOverviewRecentMessages", "", 2, "desc", "false");
   usersLiList.forEach(userLi => {
     userLi.addEventListener('click', () => {
       DisplayOtherUserDetails(userLi.id);

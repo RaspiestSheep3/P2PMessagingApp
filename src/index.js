@@ -13,6 +13,14 @@ const createWindow = () => {
 
   console.debug(`ICON PATH : ${iconPath}`)
 
+  //!TEMP - FOR TESTING - TO REMOVE
+  // Extract backendPort from process.argv
+  const backendPortArg = process.argv.find(arg => arg.startsWith('backendPort='));
+  const backendPort = backendPortArg ? backendPortArg.split('=')[1] : '';
+
+
+  console.log("Index is passing backendPort:", backendPort);
+
   // Create the browser window.
   mainWindow = new BrowserWindow({
     width: 800,
@@ -20,6 +28,8 @@ const createWindow = () => {
     icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      //!TEMP - FOR TESTING MULTIPLE USERS
+      additionalArguments: [`--backendPort=${backendPort}`]
     },
   });
 
