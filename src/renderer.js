@@ -6,6 +6,7 @@ let themes = null;
 let currentTheme = null;
 let publicKey = null;
 let displayName = null;
+let targetedUserIdentifier = null;
 
 //Consts
 const stylesheet = document.documentElement.style;
@@ -98,7 +99,10 @@ function DisplaySetUsers(id, chatID, banner="", amount = 0, sort = "asc" ,revers
     li.className = "displayText chatlistElement underlineFade";
     li.id = savedUser[0];
     li.textContent = savedUser[1];
-    li.addEventListener("click",() => GetDisplayMessages(li.id, chatID, banner, amount, sort, reversed));
+    li.addEventListener("click",() => {
+      targetedUserIdentifier = li.id;
+      GetDisplayMessages(li.id, chatID, banner, amount, sort, reversed);
+    });
     chatListUL.appendChild(li);
     savedUsersLi.push(li);
   });
@@ -236,6 +240,27 @@ function UserSearchBar(ul, searchBar) {
   });
 }
 
+async function SendMessage(messageBox, otherUserIdentifier) {
+  const response = await fetch(`http://127.0.0.1:${backendPort}/api/Post/SendMessageToUser/${otherUserIdentifier}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({"message" : messageBox.value})
+    });
+  console.log(response);
+  messageBox.value = "";
+}
+
+function SetupMessenger() {
+  const messageBox = document.getElementById("messagingInputField");
+  const messageSendButton = document.getElementById("sendMessageButton");
+
+  messageSendButton.addEventListener("click", () => {
+    SendMessage(messageBox, targetedUserIdentifier);
+  });
+}
+
 async function InitChat() {
   await GetDetails();
   console.debug("GOT DETAILS");
@@ -248,6 +273,8 @@ async function InitChat() {
   console.debug("DISPLAYED SAVED USERS")
   UserSearchBar(document.getElementById("chatlistUL"), document.getElementById("searchForUserInput"));
   console.debug("SET SEARCH BAR");
+   SetupMessenger();
+  console.debug("SET MESSENGER");
   themes = await GetThemes();
   console.debug("GOT THEMES");
   UpdateCSSTheme(currentTheme);

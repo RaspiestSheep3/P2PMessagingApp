@@ -23,6 +23,9 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.exceptions import InvalidSignature
 
+#!TEMP 
+from time import sleep
+
 #!TEMP - MAKE BETTER SYSTEM FOR IDENTIFICATION
 identifier = input("PEER IDENTIFIER : ")
 
@@ -50,6 +53,8 @@ class Peer():
         self.fernetKey = None
         self.hashedIdentifier =  hashlib.sha256(identifier.encode()).hexdigest()
         self.appName = "P2PMessagingApp"
+        self.openConnections = {}
+        self.openConnectionsLock = threading.Lock() 
         
         #Logging setup
         self.logFormatter = colorlog.ColoredFormatter(
@@ -91,296 +96,247 @@ class Peer():
         self.logger.addHandler(self.errorLogHandler)          
     
     def Start(self):
-        self.incomingConnectionSocket.bind((self.incomingConnectionHost, self.incomingConnectionPort))
-        self.incomingConnectionSocket.listen(5)
-        self.logger.info("SERVER STARTED UP")
-        
-        #SQL
-        conn = sqlite3.connect(self.databaseName)
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS savedUsers (
-                identifier STRING NOT NULL UNIQUE,
-                publicKey BLOB NOT NULL,
-                displayName TEXT NOT NULL
-            )
-        ''')
-
-        cursor.execute("SELECT * FROM savedUsers")
-        rows = cursor.fetchall()
-        self.knownUsers = {row[0] : row[1] for row in rows}
-
-        # Commit changes and close the connection
-        conn.commit()
-        conn.close()
-        
-        #Setup ED25519 - Shorter keys than RSA due to elliptical witchery
-        if(os.path.isfile(f"public{identifier}.key") and (os.path.isfile(f"private{identifier}.key"))):
-            with open(f"private{identifier}.key", "rb") as f:
-                privateKey = ed25519.Ed25519PrivateKey.from_private_bytes(f.read())
-            with open(f"public{identifier}.key", "rb") as f:
-                publicKey = ed25519.Ed25519PublicKey.from_public_bytes(f.read())
-        
-        else:
-            #Making new ED25519 Keys
-            privateKey = ed25519.Ed25519PrivateKey.generate()
-            publicKey = privateKey.public_key()
+        try:
+            self.incomingConnectionSocket.bind((self.incomingConnectionHost, self.incomingConnectionPort))
+            self.incomingConnectionSocket.listen(5)
+            self.logger.info("SERVER STARTED UP")
             
-            with open(f"private{identifier}.key", "wb") as f:
-                f.write(privateKey.private_bytes(
-                    encoding=serialization.Encoding.Raw,
-                    format=serialization.PrivateFormat.Raw,
-                    encryption_algorithm=serialization.NoEncryption()
-                ))
+            #SQL
+            conn = sqlite3.connect(self.databaseName)
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS savedUsers (
+                    identifier STRING NOT NULL UNIQUE,
+                    publicKey BLOB NOT NULL,
+                    displayName TEXT NOT NULL
+                )
+            ''')
+
+            cursor.execute("SELECT * FROM savedUsers")
+            rows = cursor.fetchall()
+            self.knownUsers = {row[0] : row[1] for row in rows}
+
+            # Commit changes and close the connection
+            conn.commit()
+            conn.close()
             
-            with open(f"public{identifier}.key", "wb") as f:
-                f.write(publicKey.public_bytes(
-                    encoding=serialization.Encoding.Raw,
-                    format=serialization.PublicFormat.Raw
-                ))
-        
-        self.publicKey = publicKey
-        self.privateKey = privateKey
-        
-        #Setting up Fernet key - used for SQL encryption
-        keyringKey = keyring.get_password(self.appName, self.hashedIdentifier)
-        if(keyringKey == None):
-            #Need to make a new keyring key
-            self.fernetKey = Fernet.generate_key()
-            keyring.set_password(self.appName, self.hashedIdentifier, self.fernetKey.decode())
-        else:
-            self.fernetKey = keyringKey.encode()
-        
-        #!TEMP
-        self.logger.warning(f"FERNET KEY (DELETE THIS) : {self.fernetKey}")
+            #Setup ED25519 - Shorter keys than RSA due to elliptical witchery
+            if(os.path.isfile(f"public{identifier}.key") and (os.path.isfile(f"private{identifier}.key"))):
+                with open(f"private{identifier}.key", "rb") as f:
+                    privateKey = ed25519.Ed25519PrivateKey.from_private_bytes(f.read())
+                with open(f"public{identifier}.key", "rb") as f:
+                    publicKey = ed25519.Ed25519PublicKey.from_public_bytes(f.read())
+            
+            else:
+                #Making new ED25519 Keys
+                privateKey = ed25519.Ed25519PrivateKey.generate()
+                publicKey = privateKey.public_key()
+                
+                with open(f"private{identifier}.key", "wb") as f:
+                    f.write(privateKey.private_bytes(
+                        encoding=serialization.Encoding.Raw,
+                        format=serialization.PrivateFormat.Raw,
+                        encryption_algorithm=serialization.NoEncryption()
+                    ))
+                
+                with open(f"public{identifier}.key", "wb") as f:
+                    f.write(publicKey.public_bytes(
+                        encoding=serialization.Encoding.Raw,
+                        format=serialization.PublicFormat.Raw
+                    ))
+            
+            self.publicKey = publicKey
+            self.privateKey = privateKey
+            
+            #Setting up Fernet key - used for SQL encryption
+            keyringKey = keyring.get_password(self.appName, self.hashedIdentifier)
+            if(keyringKey == None):
+                #Need to make a new keyring key
+                self.fernetKey = Fernet.generate_key()
+                keyring.set_password(self.appName, self.hashedIdentifier, self.fernetKey.decode())
+            else:
+                self.fernetKey = keyringKey.encode()
+            
+            #!TEMP
+            self.logger.warning(f"FERNET KEY (DELETE THIS) : {self.fernetKey}")
+        except Exception as e:
+            self.logger.error(f"Error {e} in Start", exc_info=True)
         
     #Public Key Visualiser
     def VisualisePublicKey(self, userIdentifier):
-        key = None
-        if(userIdentifier == identifier):
-            key = self.publicKey.public_bytes(
-                    encoding=serialization.Encoding.Raw,
-                    format=serialization.PublicFormat.Raw
-                ).hex()
-        elif(userIdentifier in self.knownUsers):
-            key = (self.knownUsers[userIdentifier]).hex()
-        
-        if(key != None):
-            key = ":".join(key[i:i+4] for i in range(0, len(key), 4)) #Writes as abcd:1234:efgh
-        
-        return key
+        try:
+            key = None
+            if(userIdentifier == identifier):
+                key = self.publicKey.public_bytes(
+                        encoding=serialization.Encoding.Raw,
+                        format=serialization.PublicFormat.Raw
+                    ).hex()
+            elif(userIdentifier in self.knownUsers):
+                key = (self.knownUsers[userIdentifier]).hex()
             
-    def WaitForIncomingRequests(self):
-        while True:
-            self.logger.info("WAITING FOR REQUESTS")
-            peerSocket, addr = self.incomingConnectionSocket.accept()
-            self.logger.info(f"MESSAGE FROM {addr}")
-            if(addr not in self.connectedAddrs):
-                self.logger.info(f"{addr} IS A NEW ADDRESS")
-                self.connectedAddrs.append(addr)
-                thread = threading.Thread(target=self.HandleIncomingConnection, args=(peerSocket,), daemon=True)
-                self.activeConnectionThreads.append(thread)
-                thread.start()
+            if(key != None):
+                key = ":".join(key[i:i+4] for i in range(0, len(key), 4)) #Writes as abcd:1234:efgh
+            
+            return key
+        except Exception as e:
+            self.logger.error(f"Error {e} in VisualisePublicKey", exc_info=True)
         
+    def WaitForIncomingRequests(self):
+        try:
+            while True:
+                self.logger.info("WAITING FOR REQUESTS")
+                peerSocket, addr = self.incomingConnectionSocket.accept()
+                self.logger.info(f"MESSAGE FROM {addr}")
+                if(addr not in self.connectedAddrs):
+                    self.logger.info(f"{addr} IS A NEW ADDRESS")
+                    self.connectedAddrs.append(addr)
+                    thread = threading.Thread(target=self.HandleIncomingConnection, args=(peerSocket,), daemon=True)
+                    self.activeConnectionThreads.append(thread)
+                    thread.start()
+        except Exception as e:
+            self.logger.error(f"Error {e} in WaitForIncomingRequests", exc_info=True)
+        
+    def ListenForMessages(self, peerSocket, senderIdentifier, sBytes, AESKey, senderPublicKey):
+        try:
+            conn = sqlite3.connect(self.databaseName)
+            cursor = conn.cursor()
+            while True:
+                messageRaw = peerSocket.recv(self.messagePadLength)
+                if(messageRaw != b""):
+                    self.logger.debug(f"messageRaw in ListenForMessages : {messageRaw}")
+                    message = json.loads(messageRaw.rstrip(b"\0").decode())
+                    self.logger.debug(f"message in ListenForMessages : {message}")
+                    nonce = base64.b64decode(message["nonce"])
+                    hmacTag = base64.b64decode(message["hmacTag"])
+                    signature = base64.b64decode(message["signature"])
+                    ciphertext = base64.b64decode(message["ciphertext"])
+                    timestamp = message["timestamp"]
+                    
+                    #HMAC test   
+                    expectedHmacTag = hmac.new(sBytes, ciphertext, hashlib.sha256).digest()
+                    if hmac.compare_digest(hmacTag, expectedHmacTag):
+                        self.logger.info("HMAC TAG CORRECT")
+                    else:
+                        self.logger.error("HMAC TAG INCORRECT - DATA TAMPERED OR FORGED")
+                        return
+                        
+                    #Decrypting ciphertext
+                    aesGCM = AESGCM(AESKey)
+                    plaintext = aesGCM.decrypt(nonce, ciphertext, None).decode()
+                    
+                    #Signature test
+                    try:
+                        senderPublicKey.verify(signature, plaintext.encode())
+                    except InvalidSignature:
+                        self.logger.critical(f"INVALID SIGNATURE - DO NOT TRUST")
+                        return
+                    
+                    self.logger.info(f"RECIEVED PLAINTEXT {plaintext} which was sent at {timestamp}")
+                    
+                    #Encrypting the message with Fernet
+                    cipher = Fernet(self.fernetKey)
+                    messageFernet = cipher.encrypt(plaintext.encode())
+                    
+                    #Adding message to the SQL
+                    cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, message) VALUES (?, ?, ?)", (timestamp, senderIdentifier, messageFernet))
+                    conn.commit()
+        except Exception as e:
+            self.logger.error(f"Error {e} in ListenForMessages", exc_info=True)
+        finally:
+            conn.close()
     
     def HandleIncomingConnection(self, peerSocket):
         #TODO
-        conn = sqlite3.connect(self.databaseName)
-        cursor = conn.cursor()
-        
-        details = json.loads(peerSocket.recv(128).rstrip(b"\0").decode())
-        self.logger.info(f"RECIEVED {details}")
-        
-        if(details["type"] == "sessionRequest"):
-            incomingPayloadLength = details["DHEPayloadLength"]
-            senderIdentifier = details["identifier"]
-            if(senderIdentifier not in self.knownUsers):
-                shouldRequestKey = True
-            else:
-                shouldRequestKey = False
-            self.logger.info(f"NEW REQUEST FROM {senderIdentifier}")
-            peerSocket.send(json.dumps({"type" : "sessionRequestAccept", "keyRequest" : shouldRequestKey, "identifier" : identifier}).encode().ljust(128, b"\0"))
+        try:
+            conn = sqlite3.connect(self.databaseName)
+            cursor = conn.cursor()
             
-            if(shouldRequestKey):
-                self.logger.debug("REQUESTING KEY")
-                senderPublicKey = json.loads(peerSocket.recv(128).rstrip(b"\0").decode())["publicKey"]
-                senderPublicKey = base64.b64decode(senderPublicKey)
+            details = json.loads(peerSocket.recv(128).rstrip(b"\0").decode())
+            self.logger.info(f"RECIEVED {details}")
+            
+            if(details["type"] == "sessionRequest"):
+                incomingPayloadLength = details["DHEPayloadLength"]
+                senderIdentifier = details["identifier"]
+                if(senderIdentifier not in self.knownUsers):
+                    shouldRequestKey = True
+                else:
+                    shouldRequestKey = False
+                self.logger.info(f"NEW REQUEST FROM {senderIdentifier}")
+                peerSocket.send(json.dumps({"type" : "sessionRequestAccept", "keyRequest" : shouldRequestKey, "identifier" : identifier}).encode().ljust(128, b"\0"))
                 
-                #Updating SQL
-                cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName) VALUES (?, ?, ?)", (senderIdentifier, senderPublicKey, details["displayName"]))
+                if(shouldRequestKey):
+                    self.logger.debug("REQUESTING KEY")
+                    senderPublicKey = json.loads(peerSocket.recv(128).rstrip(b"\0").decode())["publicKey"]
+                    senderPublicKey = base64.b64decode(senderPublicKey)
+                    
+                    #Updating SQL
+                    cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName) VALUES (?, ?, ?)", (senderIdentifier, senderPublicKey, details["displayName"]))
+                    
+                    conn.commit()
+                    self.knownUsers[senderPublicKey] = senderPublicKey #Adding to dict
+                else:
+                    self.logger.debug(f"ALREADY HAVE KEY FOR {senderIdentifier}")
+                    cursor.execute("SELECT * FROM savedUsers WHERE identifier = ?", (senderIdentifier,))
+                    senderPublicKey = cursor.fetchone()[1]
                 
-                conn.commit()
-                self.knownUsers[senderPublicKey] = senderPublicKey #Adding to dict
-            else:
-                self.logger.debug(f"ALREADY HAVE KEY FOR {senderIdentifier}")
-                cursor.execute("SELECT * FROM savedUsers WHERE identifier = ?", (senderIdentifier,))
-                senderPublicKey = cursor.fetchone()[1]
-            
-            senderPublicKey = ed25519.Ed25519PublicKey.from_public_bytes(senderPublicKey)
-            
-            payload = json.loads(peerSocket.recv(incomingPayloadLength).decode())
-            self.logger.debug(f"PAYLOAD {payload}")
-            
-            #Making b, finding B
-            b = self.GeneratePrime(self.DHEBitLength)
-            B = pow(payload["g"], b, payload["p"])
-            
-            #finding s
-            s = pow(payload["A"], b, payload["p"])
-            
-            #Sending B so sender can find s
-            self.logger.debug(len(json.dumps({"B" : B})))
-            peerSocket.send(json.dumps({"B" : B}).encode().ljust(int(self.DHEBitLength / 2), b"\0")) 
-            
-            sBytes = s.to_bytes((s.bit_length() + 7) // 8, byteorder="big")
-            
-            #Generating AES Key
-            AESKey = HKDF(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=None,
-                info=b'handshake data',
-                backend=default_backend()
-            ).derive(sBytes)
-            
-            #Avoiding SQL Injection - Only allow nums, letters and _s
-            if(re.sub(r"\W+", "", senderIdentifier) != senderIdentifier):
-                self.logger.error(f"SENDER IDENTIFIER IS INVALID - ATTEMPTED SQL INJECTION")
-                return
-            
-            #Creating the SQL table
-            cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS chat{senderIdentifier} (
-                timestamp TEXT NOT NULL,
-                senderIdentifier TEXT NOT NULL,
-                message TEXT NOT NULL
-            )
-            ''')
-            conn.commit()
-            
-            #Receiving message
-            message = json.loads(peerSocket.recv(self.messagePadLength).rstrip(b"\0").decode())
-            nonce = base64.b64decode(message["nonce"])
-            hmacTag = base64.b64decode(message["hmacTag"])
-            signature = base64.b64decode(message["signature"])
-            ciphertext = base64.b64decode(message["ciphertext"])
-            timestamp = message["timestamp"]
-            
-            #HMAC test   
-            expectedHmacTag = hmac.new(sBytes, ciphertext, hashlib.sha256).digest()
-            if hmac.compare_digest(hmacTag, expectedHmacTag):
-                self.logger.info("HMAC TAG CORRECT")
-            else:
-                self.logger.error("HMAC TAG INCORRECT - DATA TAMPERED OR FORGED")
-                return
+                senderPublicKey = ed25519.Ed25519PublicKey.from_public_bytes(senderPublicKey)
                 
-            #Decrypting ciphertext
-            aesGCM = AESGCM(AESKey)
-            plaintext = aesGCM.decrypt(nonce, ciphertext, None).decode()
-            
-            #Signature test
-            try:
-                senderPublicKey.verify(signature, plaintext.encode())
-            except InvalidSignature:
-                self.logger.critical(f"INVALID SIGNATURE - DO NOT TRUST")
-                return
-            
-            self.logger.info(f"RECIEVED PLAINTEXT {plaintext} which was sent at {timestamp}")
-            
-            #Encrypting the message with Fernet
-            cipher = Fernet(self.fernetKey)
-            messageFernet = cipher.encrypt(plaintext.encode())
-            
-            #Adding message to the SQL
-            cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, message) VALUES (?, ?, ?)", (timestamp, senderIdentifier, messageFernet))
-            conn.commit()
-    
-        conn.close()
-    
-    def StartSession(self):
-        #TODO
-        conn = sqlite3.connect(self.databaseName)
-        cursor = conn.cursor()
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as outputSocket:
-            port = int(input("LISTENER PORT"))   
-            outputSocket.connect(("127.0.0.1", port))            
-            
-            #Choosing the DHE p,g and a
-            p = self.GeneratePrime(self.DHEBitLength)
-            g = self.GeneratePrime(self.DHEBitLength)
-            a = self.GeneratePrime(self.DHEBitLength)
-            
-            self.logger.debug("FOUND P G a")
-            
-            #Computing A
-            A = pow(g,a,p)
-            
-            self.logger.debug("FOUND A")
-            
-            #Generating p g and A payload
-            payload = json.dumps({"p" : p, "g" : g, "A" : A}).encode()
-            
-            #Sending a session request and the length of the payload
-            outputSocket.send(json.dumps({"type" : "sessionRequest", "identifier" : identifier ,"DHEPayloadLength" : math.ceil(len(payload) / 256) * 256, "displayName" : displayName}).encode().ljust(128, b"\0"))
-            self.logger.debug("SENT REQUEST + DETAILS")
-            
-            response = json.loads(outputSocket.recv(128).rstrip(b"\0").decode())
-            
-            if(response["type"] != "sessionRequestAccept"):
-                self.logger.debug("FAILED REQUEST")
-                return
-            
-            recipientIdentifier = response["identifier"] 
-            
-            if(response["keyRequest"] == True):
-                #Sending public key
-                publicKeyBytes = self.publicKey.public_bytes(
-                    encoding=serialization.Encoding.Raw,
-                    format=serialization.PublicFormat.Raw
+                payload = json.loads(peerSocket.recv(incomingPayloadLength).decode())
+                self.logger.debug(f"PAYLOAD {payload}")
+                
+                #Making b, finding B
+                b = self.GeneratePrime(self.DHEBitLength)
+                B = pow(payload["g"], b, payload["p"])
+                
+                #finding s
+                s = pow(payload["A"], b, payload["p"])
+                
+                #Sending B so sender can find s
+                self.logger.debug(len(json.dumps({"B" : B})))
+                peerSocket.send(json.dumps({"B" : B}).encode().ljust(int(self.DHEBitLength / 2), b"\0")) 
+                
+                sBytes = s.to_bytes((s.bit_length() + 7) // 8, byteorder="big")
+                
+                #Generating AES Key
+                AESKey = HKDF(
+                    algorithm=hashes.SHA256(),
+                    length=32,
+                    salt=None,
+                    info=b'handshake data',
+                    backend=default_backend()
+                ).derive(sBytes)
+                
+                #Avoiding SQL Injection - Only allow nums, letters and _s
+                if(re.sub(r"\W+", "", senderIdentifier) != senderIdentifier):
+                    self.logger.error(f"SENDER IDENTIFIER IS INVALID - ATTEMPTED SQL INJECTION")
+                    return
+                
+                #Creating the SQL table
+                cursor.execute(f'''
+                CREATE TABLE IF NOT EXISTS chat{senderIdentifier} (
+                    timestamp TEXT NOT NULL,
+                    senderIdentifier TEXT NOT NULL,
+                    message TEXT NOT NULL
                 )
+                ''')
+                conn.commit()
                 
-                self.logger.debug("Sending Key Request")
+                with self.openConnectionsLock:
+                    self.openConnections[senderIdentifier] = peerSocket
+            
+                self.logger.warning(f"(DELETE THIS) OPEN CONNECTIONS : {self.openConnections}")
                 
-                
-                outputSocket.send(json.dumps({"publicKey" : base64.b64encode(publicKeyBytes).decode()}).encode().ljust(128, b"\0"))
-            outputSocket.send(payload)
-            self.logger.debug("SENT PAYLOAD")
+                self.ListenForMessages(peerSocket, senderIdentifier, sBytes, AESKey, senderPublicKey)
+        except Exception as e:
+            self.logger.error(f"Error {e} in HandleIncomingConnection", exc_info=True)
+        finally:
+            conn.close()
+    
+    def SendMessage(self, AESKey, sBytes, outputSocket, recipientIdentifier, messageData):
+        try:
+            conn = sqlite3.connect(self.databaseName)
+            cursor = conn.cursor()
             
-            #Receiving B
-            B = json.loads(outputSocket.recv(int(self.DHEBitLength / 2)).rstrip(b"\0").decode())["B"]
-            
-            #Finding s
-            s = pow(B, a, p)
-            
-            sBytes = s.to_bytes((s.bit_length() + 7) // 8, byteorder="big")
-            
-            #Generating AES Key
-            AESKey = HKDF(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=None,
-                info=b'handshake data',
-                backend=default_backend()
-            ).derive(sBytes)
-            
-            #Avoiding SQL Injection - Only allow nums, letters and _s
-            if(re.sub(r"\W+", "", recipientIdentifier) != recipientIdentifier):
-                self.logger.error(f"RECIPIENT IDENTIFIER IS INVALID - ATTEMPTED SQL INJECTION")
-                return
-            
-            #Creating the SQL table
-            cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS chat{recipientIdentifier} (
-                timestamp TEXT NOT NULL,
-                senderIdentifier TEXT NOT NULL,
-                message BLOB NOT NULL
-            )
-            ''')
-            conn.commit()
-            
-            #Sending message
-            #TODO : make proper messaging system
-            messageData = b"TEST MESSAGE" + datetime.now().strftime("%Y-%m-%d %H:%M:%S").encode('utf-8')
             messagePayloadRaw = self.CalculateMessage(AESKey, messageData, sBytes, self.privateKey)
             messagePayload = json.dumps(messagePayloadRaw).encode()
             self.logger.debug(f"Message Payload Length : {len(messagePayload)}")
@@ -395,82 +351,202 @@ class Peer():
             #Adding message to the SQL
             cursor.execute(f"INSERT INTO chat{recipientIdentifier} (timestamp, senderIdentifier, message) VALUES (?, ?, ?)", (messagePayloadRaw["timestamp"], identifier, messageFernet))
             conn.commit()
-            
-        conn.close()   
+        except Exception as e:
+            self.logger.error(f"Error {e} in SendMessage", exc_info=True)
+        finally:
+            conn.close()
+    
+    def StartSession(self):
+        #TODO
+        try:
+            conn = sqlite3.connect(self.databaseName)
+            cursor = conn.cursor()
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as outputSocket:
+                port = int(input("LISTENER PORT"))   
+                outputSocket.connect(("127.0.0.1", port))            
+                
+                #Choosing the DHE p,g and a
+                p = self.GeneratePrime(self.DHEBitLength)
+                g = self.GeneratePrime(self.DHEBitLength)
+                a = self.GeneratePrime(self.DHEBitLength)
+                
+                self.logger.debug("FOUND P G a")
+                
+                #Computing A
+                A = pow(g,a,p)
+                
+                self.logger.debug("FOUND A")
+                
+                #Generating p g and A payload
+                payload = json.dumps({"p" : p, "g" : g, "A" : A}).encode()
+                
+                #Sending a session request and the length of the payload
+                outputSocket.send(json.dumps({"type" : "sessionRequest", "identifier" : identifier ,"DHEPayloadLength" : math.ceil(len(payload) / 256) * 256, "displayName" : displayName}).encode().ljust(128, b"\0"))
+                self.logger.debug("SENT REQUEST + DETAILS")
+                
+                response = json.loads(outputSocket.recv(128).rstrip(b"\0").decode())
+                
+                if(response["type"] != "sessionRequestAccept"):
+                    self.logger.debug("FAILED REQUEST")
+                    return
+                
+                recipientIdentifier = response["identifier"] 
+                
+                if(response["keyRequest"] == True):
+                    #Sending public key
+                    publicKeyBytes = self.publicKey.public_bytes(
+                        encoding=serialization.Encoding.Raw,
+                        format=serialization.PublicFormat.Raw
+                    )
+                    
+                    self.logger.debug("Sending Key Request")
+                    
+                    
+                    outputSocket.send(json.dumps({"publicKey" : base64.b64encode(publicKeyBytes).decode()}).encode().ljust(128, b"\0"))
+                outputSocket.send(payload)
+                self.logger.debug("SENT PAYLOAD")
+                
+                #Receiving B
+                B = json.loads(outputSocket.recv(int(self.DHEBitLength / 2)).rstrip(b"\0").decode())["B"]
+                
+                #Finding s
+                s = pow(B, a, p)
+                
+                sBytes = s.to_bytes((s.bit_length() + 7) // 8, byteorder="big")
+                
+                #Generating AES Key
+                AESKey = HKDF(
+                    algorithm=hashes.SHA256(),
+                    length=32,
+                    salt=None,
+                    info=b'handshake data',
+                    backend=default_backend()
+                ).derive(sBytes)
+                
+                #Avoiding SQL Injection - Only allow nums, letters and _s
+                if(re.sub(r"\W+", "", recipientIdentifier) != recipientIdentifier):
+                    self.logger.error(f"RECIPIENT IDENTIFIER IS INVALID - ATTEMPTED SQL INJECTION")
+                    return
+                
+                #Creating the SQL table
+                cursor.execute(f'''
+                CREATE TABLE IF NOT EXISTS chat{recipientIdentifier} (
+                    timestamp TEXT NOT NULL,
+                    senderIdentifier TEXT NOT NULL,
+                    message BLOB NOT NULL
+                )
+                ''')
+                conn.commit()
+                
+                #Adding connection to known connections
+                with self.openConnectionsLock:
+                    self.openConnections[recipientIdentifier] = outputSocket
+                
+                    self.logger.warning(f"(DELETE THIS) OPEN CONNECTIONS : {self.openConnections}")
+                
+                #Sending message
+                #TODO : make proper messaging system       
+                self.SendMessage(AESKey, sBytes, outputSocket, recipientIdentifier, b"TEST MESSAGE" + datetime.now().strftime("%Y-%m-%d %H:%M:%S").encode('utf-8'))
+        
+                #!TEMP - FOR TESTING
+                sleep(2)
+                self.SendMessage(AESKey, sBytes, outputSocket, recipientIdentifier, b"TEST MESSAGE" + datetime.now().strftime("%Y-%m-%d %H:%M:%S").encode('utf-8'))
+        
+        except Exception as e:
+            self.logger.error(f"Error {e} in StartSession", exc_info=True)
+        finally:
+            conn.close()   
             
     def CalculateMessage(self, AESKey, plaintext, sBytes, edPrivateKey):
-        nonce = os.urandom(12)
-        aesGCM = AESGCM(AESKey)
-        ciphertext = aesGCM.encrypt(nonce, plaintext, None)
-        
-        #HMAC - makes sure the data has not been tampered with, comes from someone with the correct key
-        
-        hmacTag = hmac.new(sBytes, ciphertext, hashlib.sha256).digest()
-        
-        #ED - signature
-        signature = edPrivateKey.sign(plaintext)
-        
-        #Timestamp
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        return {
-            "nonce": base64.b64encode(nonce).decode(), #Doing this because json.dumps doesnt like b""
-            "hmacTag": base64.b64encode(hmacTag).decode(),
-            "signature" : base64.b64encode(signature).decode(),
-            "ciphertext": base64.b64encode(ciphertext).decode(),
-            "timestamp" : timestamp
-        }
+        try:
+            nonce = os.urandom(12)
+            aesGCM = AESGCM(AESKey)
+            ciphertext = aesGCM.encrypt(nonce, plaintext, None)
+            
+            #HMAC - makes sure the data has not been tampered with, comes from someone with the correct key
+            
+            hmacTag = hmac.new(sBytes, ciphertext, hashlib.sha256).digest()
+            
+            #ED - signature
+            signature = edPrivateKey.sign(plaintext)
+            
+            #Timestamp
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            return {
+                "nonce": base64.b64encode(nonce).decode(), #Doing this because json.dumps doesnt like b""
+                "hmacTag": base64.b64encode(hmacTag).decode(),
+                "signature" : base64.b64encode(signature).decode(),
+                "ciphertext": base64.b64encode(ciphertext).decode(),
+                "timestamp" : timestamp
+            }
+        except Exception as e:
+            self.logger.error(f"Error {e} in CalculateMessage", exc_info=True)
     
     def ReturnMessages(self, otherIdentifier, amount, sort, reversed):
-        conn = sqlite3.connect(self.databaseName)
-        cursor = conn.cursor()
-        
-        if(sort == "asc"):
-            cursor.execute(f"SELECT * FROM chat{otherIdentifier} ORDER BY timestamp ASC")
-            self.logger.debug("ASC")
-        else:
-            cursor.execute(f"SELECT * FROM chat{otherIdentifier} ORDER BY timestamp DESC")
-            self.logger.debug("DESC")
-        if(int(amount) == 0):
-            rows = cursor.fetchall()
-        else:
-            rows = cursor.fetchmany(amount)
-        
-        cipher = Fernet(self.fernetKey)
-        
-        rows = [[row[0], row[1], cipher.decrypt(row[2]).decode()] for row in rows]
-        
-        if(reversed == "true" and sort=="asc") or (reversed=="false" and sort=="desc"):
-            rows = rows[::-1] #Making sure its in the right order
+        try:
+            if(re.sub(r"\W+", "", otherIdentifier) != otherIdentifier): #Stopping SQL injection attack
+                self.logger.error(f"SENDER IDENTIFIER IS INVALID IN RETURNMESSAGES - ATTEMPTED SQL INJECTION")
+                return
+            
+            conn = sqlite3.connect(self.databaseName)
+            cursor = conn.cursor()
 
-        self.logger.debug(f"ROWS REVERSED: {rows}")
+            if(sort == "asc"):
+                cursor.execute(f"SELECT * FROM chat{otherIdentifier} ORDER BY timestamp ASC")
+                self.logger.debug("ASC")
+            else:
+                cursor.execute(f"SELECT * FROM chat{otherIdentifier} ORDER BY timestamp DESC")
+                self.logger.debug("DESC")
+            if(int(amount) == 0):
+                rows = cursor.fetchall()
+            else:
+                rows = cursor.fetchmany(amount)
+            
+            cipher = Fernet(self.fernetKey)
+            
+            rows = [[row[0], row[1], cipher.decrypt(row[2]).decode()] for row in rows]
+            
+            if(reversed == "true" and sort=="asc") or (reversed=="false" and sort=="desc"):
+                rows = rows[::-1] #Making sure its in the right order
 
-        conn.close()
-        return rows
+            self.logger.debug(f"ROWS REVERSED: {rows}")
+
+        except Exception as e:
+            self.logger.error(f"Error {e} in ReturnMessages", exc_info=True)
+        finally:
+            conn.close()
+            return rows
 
     def ReturnSavedUsers(self):
-        conn = sqlite3.connect(self.databaseName)
-        cursor = conn.cursor()
-        
-        cursor.execute(f"SELECT * FROM savedUsers")
-        rows = cursor.fetchall()
+        try:
+            conn = sqlite3.connect(self.databaseName)
+            cursor = conn.cursor()
+            
+            cursor.execute(f"SELECT * FROM savedUsers")
+            rows = cursor.fetchall()
 
-        rows = [[row[0], row[2]] for row in rows]
-        
-        conn.close()
-        
-        self.logger.debug(f"USERS : f{rows}")
-        return rows
+            rows = [[row[0], row[2]] for row in rows]
+            
+            conn.close()
+            
+            self.logger.debug(f"USERS : f{rows}")
+            return rows
+        except Exception as e:
+            self.logger.error(f"Error {e} in ReturnSavedUsers", exc_info=True)
 
     def GetDetailsOfUser(self, userID):
-        conn = sqlite3.connect(self.databaseName)
-        cursor = conn.cursor()
-        
-        cursor.execute(f"SELECT * FROM savedUsers WHERE identifier = ?", (userID,))
-        row = cursor.fetchone()
+        try:
+            conn = sqlite3.connect(self.databaseName)
+            cursor = conn.cursor()
+            
+            cursor.execute(f"SELECT * FROM savedUsers WHERE identifier = ?", (userID,))
+            row = cursor.fetchone()
 
-        conn.close()
-        return row
+            conn.close()
+            return row
+        except Exception as e:
+            self.logger.error(f"Error {e} in GetDetailsOfUser", exc_info=True)
 
     def GeneratePrime(self, bitLength):
         while True:
@@ -520,7 +596,7 @@ peerDetailsFilename = f"Peer{identifier}Details.json"
 #Making sure we have a peerDetailsFilename file
 if not os.path.exists(peerDetailsFilename):
     with open(peerDetailsFilename, "w") as fileHandle:
-        json.dump({"theme" : "Red"}, fileHandle, indent=4)
+        json.dump({"theme" : "Sea"}, fileHandle, indent=4)
 
 @app.route('/api/GetDetails', methods=['GET'])
 def GetDetails():
@@ -602,6 +678,16 @@ def GetDetailsOfOtherUser(otherUserID):
         "publicKey" : base64.b64encode(keyBytes).decode(),
         "displayName" : details[2] 
     })
+    
+@app.route('/api/Post/SendMessageToUser/<otherUserID>', methods=['POST'])
+def SendMessageToUser(otherUserID):
+    content = request.json  # Get JSON from the request body
+    
+    message = content["message"]
+    
+    peer.logger.debug(f"MESSAGE TO SEND TO {otherUserID}: {message}")
+        
+    return jsonify({"status" : "success"})
 
 if __name__ == "__main__":
     #Starting Website
