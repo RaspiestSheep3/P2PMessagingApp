@@ -55,7 +55,9 @@ class Peer():
         self.hashedIdentifier =  hashlib.sha256(identifier.encode()).hexdigest()
         self.appName = "P2PMessagingApp"
         self.openConnections = {}
-        self.openConnectionsLock = threading.Lock() 
+        self.openConnectionsLock = threading.Lock()
+        self.messagingQueues = {}
+        self.connectionLocks = {}
         
         #Logging setup
         self.logFormatter = colorlog.ColoredFormatter(
@@ -204,6 +206,13 @@ class Peer():
             conn = sqlite3.connect(self.databaseName)
             cursor = conn.cursor()
             while True:
+                #with self.connectionLocks[senderIdentifier]:
+                self.logger.debug(f"Sender Identifier in ListenForMessages is {senderIdentifier}")
+                
+                if peerSocket.fileno() == -1: #Checks if the connections open
+                    self.logger.error(f"{senderIdentifier} socket is closed")
+                    return
+                
                 messageRaw = peerSocket.recv(self.messagePadLength)
                 if(messageRaw != b""):
                     self.logger.debug(f"messageRaw in ListenForMessages : {messageRaw}")
@@ -312,6 +321,8 @@ class Peer():
                 
                 sBytes = s.to_bytes((s.bit_length() + 7) // 8, byteorder="big")
                 
+                self.logger.info("FOUND sBYTES in HandleIncomingConnection")
+                
                 #Generating AES Key
                 AESKey = HKDF(
                     algorithm=hashes.SHA256(),
@@ -341,14 +352,31 @@ class Peer():
             
                 self.logger.warning(f"(DELETE THIS) OPEN CONNECTIONS : {self.openConnections}")
                 
+                #Making a lock for this message
+                if(senderIdentifier not in self.connectionLocks):
+                    self.connectionLocks[senderIdentifier] = threading.Lock()
+                
+                #Making queue
+                if(senderIdentifier not in self.messagingQueues):
+                    self.messagingQueues[senderIdentifier] = queue.Queue()
+                
                 threading.Thread(target = self.ListenForMessages, args=(peerSocket, senderIdentifier, sBytes, AESKey, senderPublicKey), daemon=True).start()
-                #sleep(6)
-                #self.logger.info("Sending Return Message in HandleIncomingConnection")
-                #self.SendMessage(AESKey, sBytes, peerSocket, senderIdentifier, "THIS IS A TEST RETURN MESSAGE".encode())
+                threading.Thread(target=self.MessageSender, args=(AESKey, sBytes, peerSocket, senderIdentifier)).start()
+                sleep(6)
+                self.logger.info("Sending Return Message in HandleIncomingConnection")
+                self.messagingQueues[senderIdentifier].put("TEST RETURN MESSAGE" + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                
         except Exception as e:
             self.logger.error(f"Error {e} in HandleIncomingConnection", exc_info=True)
         finally:
             conn.close()
+    
+    def MessageSender(self, AESKey, sBytes, outputSocket, recipientIdentifer):
+        messageQueue = self.messagingQueues[recipientIdentifer]
+        while True:
+            messageData = messageQueue.get().encode()
+            self.logger.warning(f"Now Sending {messageData} to {recipientIdentifer}")
+            self.SendMessage(AESKey, sBytes, outputSocket, recipientIdentifer, messageData)
     
     def SendMessage(self, AESKey, sBytes, outputSocket, recipientIdentifier, messageData):
         try:
@@ -359,7 +387,9 @@ class Peer():
             messagePayload = json.dumps(messagePayloadRaw).encode()
             self.logger.debug(f"Message Payload Length : {len(messagePayload)}")
             self.logger.info("Sending padded payload of length " + str(len(messagePayload.ljust(self.messagePadLength, b'\0'))))
-            outputSocket.send(messagePayload.ljust(self.messagePadLength, b"\0"))
+            with self.connectionLocks[recipientIdentifier]:
+                self.logger.debug(f"Recipient Identifier in SendMessage is {recipientIdentifier}")
+                outputSocket.send(messagePayload.ljust(self.messagePadLength, b"\0"))
 
             #Encrypting message with SQL
             #Encrypting the message with Fernet
@@ -379,128 +409,140 @@ class Peer():
         try:
             conn = sqlite3.connect(self.databaseName)
             cursor = conn.cursor()
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as outputSocket:
-                port = int(input("LISTENER PORT"))   
-                outputSocket.connect(("127.0.0.1", port))            
-                
-                #Choosing the DHE p,g and a
-                p = self.GeneratePrime(self.DHEBitLength)
-                g = self.GeneratePrime(self.DHEBitLength)
-                a = self.GeneratePrime(self.DHEBitLength)
-                
-                self.logger.debug("FOUND P G a")
-                
-                #Computing A
-                A = pow(g,a,p)
-                
-                self.logger.debug("FOUND A")
-                
-                #Generating p g and A payload
-                payload = json.dumps({"p" : p, "g" : g, "A" : A}).encode()
-                payload = payload.ljust(math.ceil(len(payload) / 256) * 256, b"\0")
-                
-                #Sending a session request and the length of the payload
-                self.logger.debug(f"Length Of Payload On Sender Side : {len(payload)}")
-                outputSocket.send(json.dumps({"type" : "sessionRequest", "identifier" : identifier ,"DHEPayloadLength" : len(payload), "displayName" : displayName}).encode().ljust(128, b"\0"))
-                self.logger.debug("SENT REQUEST + DETAILS")
-                
-                response = json.loads(outputSocket.recv(128).rstrip(b"\0").decode())
-                
-                if(response["type"] != "sessionRequestAccept"):
-                    self.logger.debug("FAILED REQUEST")
-                    return
-                
-                recipientIdentifier = response["identifier"] 
-                
-                if(response["keyRequest"] == True):
-                    #Sending public key
-                    publicKeyBytes = self.publicKey.public_bytes(
-                        encoding=serialization.Encoding.Raw,
-                        format=serialization.PublicFormat.Raw
-                    )
-                    
-                    self.logger.debug("Sending Key Request")
-                    
-                    
-                    outputSocket.send(json.dumps({"publicKey" : base64.b64encode(publicKeyBytes).decode()}).encode().ljust(128, b"\0"))
-                
-                if(recipientIdentifier not in self.knownUsers):
-                    shouldRequestKey = True
-                else:
-                    shouldRequestKey = False
-                
-                if(shouldRequestKey):
-                    outputSocket.send(json.dumps({"type" : "recipientPublicKeyRequest"}).encode().ljust(64, b"\0"))
-                    recipientPublicKeyDetails = json.loads(outputSocket.recv(256).rstrip(b"\0").decode())
-                    self.logger.debug(type(self.knownUsers))
-                    recipientPublicKey = base64.b64decode(recipientPublicKeyDetails["recipientPublicKey"])
-                    self.knownUsers[recipientIdentifier] = recipientPublicKey
-                    self.logger.debug("REQUESTING KEY IN StartSession")
-                    self.logger.debug(f"NEW knownUsers in StartSession : {self.knownUsers}")
-                
-                    #Updating SQL
-                    cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName) VALUES (?, ?, ?)", (recipientIdentifier, recipientPublicKey, recipientPublicKeyDetails["displayName"]))
-                    
-                    conn.commit()
-                else:
-                    outputSocket.send(json.dumps({"type" : "recipientPublicKeyNotNeeded"}).encode().ljust(64, b"\0"))
-                    self.logger.debug(f"ALREADY HAVE KEY FOR {recipientIdentifier}")
-                    cursor.execute("SELECT * FROM savedUsers WHERE identifier = ?", (recipientIdentifier,))
-                    recipientPublicKey = cursor.fetchone()[1]
-                
-                recipientPublicKey = ed25519.Ed25519PublicKey.from_public_bytes(recipientPublicKey)
-                
-                outputSocket.send(payload)
-                self.logger.debug("SENT PAYLOAD")
-                
-                #Receiving B
-                B = json.loads(outputSocket.recv(int(self.DHEBitLength / 2)).rstrip(b"\0").decode())["B"]
-                
-                #Finding s
-                s = pow(B, a, p)
-                
-                sBytes = s.to_bytes((s.bit_length() + 7) // 8, byteorder="big")
-                
-                #Generating AES Key
-                AESKey = HKDF(
-                    algorithm=hashes.SHA256(),
-                    length=32,
-                    salt=None,
-                    info=b'handshake data',
-                    backend=default_backend()
-                ).derive(sBytes)
-                
-                #Avoiding SQL Injection - Only allow nums, letters and _s
-                if(re.sub(r"\W+", "", recipientIdentifier) != recipientIdentifier):
-                    self.logger.error(f'RECIPIENT IDENTIFIER IS INVALID IN STARTSESSION - ATTEMPTED SQL INJECTION (ORG : {recipientIdentifier})')
-                    return
-                
-                #Creating the SQL table
-                cursor.execute(f'''
-                CREATE TABLE IF NOT EXISTS chat{recipientIdentifier} (
-                    timestamp TEXT NOT NULL,
-                    senderIdentifier TEXT NOT NULL,
-                    message BLOB NOT NULL
+            outputSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            port = int(input("LISTENER PORT"))   
+            outputSocket.connect(("127.0.0.1", port))            
+            
+            #Choosing the DHE p,g and a
+            p = self.GeneratePrime(self.DHEBitLength)
+            g = self.GeneratePrime(self.DHEBitLength)
+            a = self.GeneratePrime(self.DHEBitLength)
+            
+            self.logger.debug("FOUND P G a")
+            
+            #Computing A
+            A = pow(g,a,p)
+            
+            self.logger.debug("FOUND A")
+            
+            #Generating p g and A payload
+            payload = json.dumps({"p" : p, "g" : g, "A" : A}).encode()
+            payload = payload.ljust(math.ceil(len(payload) / 256) * 256, b"\0")
+            
+            #Sending a session request and the length of the payload
+            self.logger.debug(f"Length Of Payload On Sender Side : {len(payload)}")
+            outputSocket.send(json.dumps({"type" : "sessionRequest", "identifier" : identifier ,"DHEPayloadLength" : len(payload), "displayName" : displayName}).encode().ljust(128, b"\0"))
+            self.logger.debug("SENT REQUEST + DETAILS")
+            
+            response = json.loads(outputSocket.recv(128).rstrip(b"\0").decode())
+            
+            if(response["type"] != "sessionRequestAccept"):
+                self.logger.debug("FAILED REQUEST")
+                return
+            
+            recipientIdentifier = response["identifier"] 
+            
+            if(response["keyRequest"] == True):
+                #Sending public key
+                publicKeyBytes = self.publicKey.public_bytes(
+                    encoding=serialization.Encoding.Raw,
+                    format=serialization.PublicFormat.Raw
                 )
-                ''')
+                
+                self.logger.debug("Sending Key Request")
+                
+                
+                outputSocket.send(json.dumps({"publicKey" : base64.b64encode(publicKeyBytes).decode()}).encode().ljust(128, b"\0"))
+            
+            if(recipientIdentifier not in self.knownUsers):
+                shouldRequestKey = True
+            else:
+                shouldRequestKey = False
+            
+            if(shouldRequestKey):
+                outputSocket.send(json.dumps({"type" : "recipientPublicKeyRequest"}).encode().ljust(64, b"\0"))
+                recipientPublicKeyDetails = json.loads(outputSocket.recv(256).rstrip(b"\0").decode())
+                self.logger.debug(type(self.knownUsers))
+                recipientPublicKey = base64.b64decode(recipientPublicKeyDetails["recipientPublicKey"])
+                self.knownUsers[recipientIdentifier] = recipientPublicKey
+                self.logger.debug("REQUESTING KEY IN StartSession")
+                self.logger.debug(f"NEW knownUsers in StartSession : {self.knownUsers}")
+            
+                #Updating SQL
+                cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName) VALUES (?, ?, ?)", (recipientIdentifier, recipientPublicKey, recipientPublicKeyDetails["displayName"]))
+                
                 conn.commit()
-                
-                #Adding connection to known connections
-                with self.openConnectionsLock:
-                    self.openConnections[recipientIdentifier] = outputSocket
-                
-                    self.logger.warning(f"(DELETE THIS) OPEN CONNECTIONS : {self.openConnections}")
-                
-                threading.Thread(target = peer.ListenForMessages, args=(outputSocket, recipientIdentifier, sBytes, AESKey, recipientPublicKey), daemon=False).start()
-                
-                #Sending message
-                #TODO : make proper messaging system       
-                self.SendMessage(AESKey, sBytes, outputSocket, recipientIdentifier, b"TEST MESSAGE" + datetime.now().strftime("%Y-%m-%d %H:%M:%S").encode('utf-8'))
-        
-                #!TEMP - FOR TESTING
-                sleep(2)
-                self.SendMessage(AESKey, sBytes, outputSocket, recipientIdentifier, b"TEST MESSAGE" + datetime.now().strftime("%Y-%m-%d %H:%M:%S").encode('utf-8'))
-        
+            else:
+                outputSocket.send(json.dumps({"type" : "recipientPublicKeyNotNeeded"}).encode().ljust(64, b"\0"))
+                self.logger.debug(f"ALREADY HAVE KEY FOR {recipientIdentifier}")
+                cursor.execute("SELECT * FROM savedUsers WHERE identifier = ?", (recipientIdentifier,))
+                recipientPublicKey = cursor.fetchone()[1]
+            
+            recipientPublicKey = ed25519.Ed25519PublicKey.from_public_bytes(recipientPublicKey)
+            
+            outputSocket.send(payload)
+            self.logger.debug("SENT PAYLOAD")
+            
+            #Receiving B
+            B = json.loads(outputSocket.recv(int(self.DHEBitLength / 2)).rstrip(b"\0").decode())["B"]
+            
+            #Finding s
+            s = pow(B, a, p)
+            
+            sBytes = s.to_bytes((s.bit_length() + 7) // 8, byteorder="big")
+            
+            self.logger.info("FOUND sBYTES in HandleIncomingConnection")
+            
+            #Generating AES Key
+            AESKey = HKDF(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=None,
+                info=b'handshake data',
+                backend=default_backend()
+            ).derive(sBytes)
+            
+            #Avoiding SQL Injection - Only allow nums, letters and _s
+            if(re.sub(r"\W+", "", recipientIdentifier) != recipientIdentifier):
+                self.logger.error(f'RECIPIENT IDENTIFIER IS INVALID IN STARTSESSION - ATTEMPTED SQL INJECTION (ORG : {recipientIdentifier})')
+                return
+            
+            #Creating the SQL table
+            cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS chat{recipientIdentifier} (
+                timestamp TEXT NOT NULL,
+                senderIdentifier TEXT NOT NULL,
+                message BLOB NOT NULL
+            )
+            ''')
+            conn.commit()
+            
+            #Adding connection to known connections
+            with self.openConnectionsLock:
+                self.openConnections[recipientIdentifier] = outputSocket
+            
+                self.logger.warning(f"(DELETE THIS) OPEN CONNECTIONS : {self.openConnections}")
+            
+            #Making a lock for this message
+            if(recipientIdentifier not in self.connectionLocks):
+                self.connectionLocks[recipientIdentifier] = threading.Lock()
+            
+            #Generating message queue
+            if(recipientIdentifier not in self.messagingQueues):
+                self.messagingQueues[recipientIdentifier] = queue.Queue()
+            
+            threading.Thread(target = peer.ListenForMessages, args=(outputSocket, recipientIdentifier, sBytes, AESKey, recipientPublicKey), daemon=False).start()
+            threading.Thread(target=self.MessageSender, args=(AESKey, sBytes, outputSocket, recipientIdentifier)).start()
+            #Sending message
+            #TODO : make proper messaging system       
+            self.messagingQueues[recipientIdentifier].put("TEST MESSAGE" + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            
+            self.logger.debug("Added First Message to self.MessagingQueues")
+            #!TEMP - FOR TESTING
+            sleep(2)
+            self.messagingQueues[recipientIdentifier].put("TEST MESSAGE" + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            self.logger.debug("Added Second Message to self.MessagingQueues")
+
         except Exception as e:
             self.logger.error(f"Error {e} in StartSession", exc_info=True)
         finally:
