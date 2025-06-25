@@ -12,6 +12,7 @@ import base64
 import sqlite3
 import re
 import keyring
+import queue
 from flask import Flask, jsonify, Response, request
 from flask_cors import CORS
 from datetime import datetime
@@ -44,7 +45,7 @@ class Peer():
         self.connectedAddrs = []
         self.activeConnectionThreads = []
         self.DHEBitLength = 512 #TODO : Consider 1024 in the future
-        self.messagePadLength = 2048
+        self.messagePadLength = 512
         self.messageLength = 1900
         self.knownUsers = []
         self.databaseName = f"Peer{identifier}Database.db"
@@ -159,6 +160,8 @@ class Peer():
             
             #!TEMP
             self.logger.warning(f"FERNET KEY (DELETE THIS) : {self.fernetKey}")
+            self.logger.warning(f"KNOWN USERS (DELETE THIS) : {self.knownUsers}")
+            
         except Exception as e:
             self.logger.error(f"Error {e} in Start", exc_info=True)
         
@@ -226,6 +229,7 @@ class Peer():
                     
                     #Signature test
                     try:
+                        self.logger.warning(f"SIGNATURE (DELETE THIS) : {senderPublicKey} {type(senderPublicKey)}")
                         senderPublicKey.verify(signature, plaintext.encode())
                     except InvalidSignature:
                         self.logger.critical(f"INVALID SIGNATURE - DO NOT TRUST")
@@ -281,7 +285,18 @@ class Peer():
                 
                 senderPublicKey = ed25519.Ed25519PublicKey.from_public_bytes(senderPublicKey)
                 
-                payload = json.loads(peerSocket.recv(incomingPayloadLength).decode())
+                senderKeyRequest = json.loads(peerSocket.recv(64).rstrip(b"\0").decode())["type"]
+                self.logger.debug(f"senderKeyRequest : {senderKeyRequest}")
+                if(senderKeyRequest == "recipientPublicKeyRequest"):
+                    #Sending public key
+                    selfPublicKey = self.publicKey.public_bytes(
+                        encoding=serialization.Encoding.Raw,
+                        format=serialization.PublicFormat.Raw
+                    )
+                    
+                    peerSocket.send(json.dumps({"type" : "recipientPublicKeyResponse", "recipientPublicKey" : base64.b64encode(selfPublicKey).decode(), "displayName" : displayName}).encode().ljust(256, b"\0"))
+                
+                payload = json.loads(peerSocket.recv(incomingPayloadLength).rstrip(b"\0").decode())
                 self.logger.debug(f"PAYLOAD {payload}")
                 
                 #Making b, finding B
@@ -308,7 +323,7 @@ class Peer():
                 
                 #Avoiding SQL Injection - Only allow nums, letters and _s
                 if(re.sub(r"\W+", "", senderIdentifier) != senderIdentifier):
-                    self.logger.error(f"SENDER IDENTIFIER IS INVALID - ATTEMPTED SQL INJECTION")
+                    self.logger.error(f'SENDER IDENTIFIER IS INVALID IN HANDLEINCOMINGCONNECTION - ATTEMPTED SQL INJECTION (ORG : {senderIdentifier})')
                     return
                 
                 #Creating the SQL table
@@ -326,7 +341,10 @@ class Peer():
             
                 self.logger.warning(f"(DELETE THIS) OPEN CONNECTIONS : {self.openConnections}")
                 
-                self.ListenForMessages(peerSocket, senderIdentifier, sBytes, AESKey, senderPublicKey)
+                threading.Thread(target = self.ListenForMessages, args=(peerSocket, senderIdentifier, sBytes, AESKey, senderPublicKey), daemon=True).start()
+                #sleep(6)
+                #self.logger.info("Sending Return Message in HandleIncomingConnection")
+                #self.SendMessage(AESKey, sBytes, peerSocket, senderIdentifier, "THIS IS A TEST RETURN MESSAGE".encode())
         except Exception as e:
             self.logger.error(f"Error {e} in HandleIncomingConnection", exc_info=True)
         finally:
@@ -340,7 +358,7 @@ class Peer():
             messagePayloadRaw = self.CalculateMessage(AESKey, messageData, sBytes, self.privateKey)
             messagePayload = json.dumps(messagePayloadRaw).encode()
             self.logger.debug(f"Message Payload Length : {len(messagePayload)}")
-            
+            self.logger.info("Sending padded payload of length " + str(len(messagePayload.ljust(self.messagePadLength, b'\0'))))
             outputSocket.send(messagePayload.ljust(self.messagePadLength, b"\0"))
 
             #Encrypting message with SQL
@@ -379,9 +397,11 @@ class Peer():
                 
                 #Generating p g and A payload
                 payload = json.dumps({"p" : p, "g" : g, "A" : A}).encode()
+                payload = payload.ljust(math.ceil(len(payload) / 256) * 256, b"\0")
                 
                 #Sending a session request and the length of the payload
-                outputSocket.send(json.dumps({"type" : "sessionRequest", "identifier" : identifier ,"DHEPayloadLength" : math.ceil(len(payload) / 256) * 256, "displayName" : displayName}).encode().ljust(128, b"\0"))
+                self.logger.debug(f"Length Of Payload On Sender Side : {len(payload)}")
+                outputSocket.send(json.dumps({"type" : "sessionRequest", "identifier" : identifier ,"DHEPayloadLength" : len(payload), "displayName" : displayName}).encode().ljust(128, b"\0"))
                 self.logger.debug("SENT REQUEST + DETAILS")
                 
                 response = json.loads(outputSocket.recv(128).rstrip(b"\0").decode())
@@ -403,6 +423,33 @@ class Peer():
                     
                     
                     outputSocket.send(json.dumps({"publicKey" : base64.b64encode(publicKeyBytes).decode()}).encode().ljust(128, b"\0"))
+                
+                if(recipientIdentifier not in self.knownUsers):
+                    shouldRequestKey = True
+                else:
+                    shouldRequestKey = False
+                
+                if(shouldRequestKey):
+                    outputSocket.send(json.dumps({"type" : "recipientPublicKeyRequest"}).encode().ljust(64, b"\0"))
+                    recipientPublicKeyDetails = json.loads(outputSocket.recv(256).rstrip(b"\0").decode())
+                    self.logger.debug(type(self.knownUsers))
+                    recipientPublicKey = base64.b64decode(recipientPublicKeyDetails["recipientPublicKey"])
+                    self.knownUsers[recipientIdentifier] = recipientPublicKey
+                    self.logger.debug("REQUESTING KEY IN StartSession")
+                    self.logger.debug(f"NEW knownUsers in StartSession : {self.knownUsers}")
+                
+                    #Updating SQL
+                    cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName) VALUES (?, ?, ?)", (recipientIdentifier, recipientPublicKey, recipientPublicKeyDetails["displayName"]))
+                    
+                    conn.commit()
+                else:
+                    outputSocket.send(json.dumps({"type" : "recipientPublicKeyNotNeeded"}).encode().ljust(64, b"\0"))
+                    self.logger.debug(f"ALREADY HAVE KEY FOR {recipientIdentifier}")
+                    cursor.execute("SELECT * FROM savedUsers WHERE identifier = ?", (recipientIdentifier,))
+                    recipientPublicKey = cursor.fetchone()[1]
+                
+                recipientPublicKey = ed25519.Ed25519PublicKey.from_public_bytes(recipientPublicKey)
+                
                 outputSocket.send(payload)
                 self.logger.debug("SENT PAYLOAD")
                 
@@ -425,7 +472,7 @@ class Peer():
                 
                 #Avoiding SQL Injection - Only allow nums, letters and _s
                 if(re.sub(r"\W+", "", recipientIdentifier) != recipientIdentifier):
-                    self.logger.error(f"RECIPIENT IDENTIFIER IS INVALID - ATTEMPTED SQL INJECTION")
+                    self.logger.error(f'RECIPIENT IDENTIFIER IS INVALID IN STARTSESSION - ATTEMPTED SQL INJECTION (ORG : {recipientIdentifier})')
                     return
                 
                 #Creating the SQL table
@@ -443,6 +490,8 @@ class Peer():
                     self.openConnections[recipientIdentifier] = outputSocket
                 
                     self.logger.warning(f"(DELETE THIS) OPEN CONNECTIONS : {self.openConnections}")
+                
+                threading.Thread(target = peer.ListenForMessages, args=(outputSocket, recipientIdentifier, sBytes, AESKey, recipientPublicKey), daemon=False).start()
                 
                 #Sending message
                 #TODO : make proper messaging system       
@@ -486,7 +535,7 @@ class Peer():
     def ReturnMessages(self, otherIdentifier, amount, sort, reversed):
         try:
             if(re.sub(r"\W+", "", otherIdentifier) != otherIdentifier): #Stopping SQL injection attack
-                self.logger.error(f"SENDER IDENTIFIER IS INVALID IN RETURNMESSAGES - ATTEMPTED SQL INJECTION")
+                self.logger.error(f'SENDER IDENTIFIER IS INVALID IN RETURNMESSAGES - ATTEMPTED SQL INJECTION (ORG : {otherIdentifier})')
                 return
             
             conn = sqlite3.connect(self.databaseName)
