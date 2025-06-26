@@ -7,12 +7,13 @@ let currentTheme = null;
 let publicKey = null;
 let displayName = null;
 let targetedUserIdentifier = null;
+let maxMessageLength = 0;
 
-//Consts
+//Consts 
 const stylesheet = document.documentElement.style;
 
 //Display Variables
-let maxThemeButtonsInRow = 4;
+const maxThemeButtonsInRow = 4;
 
 //!TEMP - FOR TESTING MULTIPLE USERS
 const backendPort = window.myAPI.backendPort;
@@ -29,6 +30,7 @@ async function GetDetails() {
     currentTheme = data["theme"] 
     publicKey = data["publicKey"]
     displayName = data["displayName"]
+    maxMessageLength = data["maxMessageLength"]
 
   } catch (error) {
       console.error("Fetch error:", error);
@@ -255,8 +257,16 @@ async function SendMessage(messageBox, otherUserIdentifier) {
 function SetupMessenger() {
   const messageBox = document.getElementById("messagingInputField");
   const messageSendButton = document.getElementById("sendMessageButton");
+  const charCount = document.getElementById("charCount");
+
+  messageBox.addEventListener("input", () => {
+    if (messageBox.value.length > maxMessageLength) messageBox.value = messageBox.value.slice(0, maxMessageLength);
+    //console.debug(`Current Length of Message : ${messageBox.value.length}/${maxMessageLength}`);
+    charCount.textContent = `${messageBox.value.length}/${maxMessageLength}`;
+  })
 
   messageSendButton.addEventListener("click", () => {
+     charCount.textContent = `0/${maxMessageLength}`;
     SendMessage(messageBox, targetedUserIdentifier);
   });
 }

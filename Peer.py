@@ -45,8 +45,8 @@ class Peer():
         self.connectedAddrs = []
         self.activeConnectionThreads = []
         self.DHEBitLength = 512 #TODO : Consider 1024 in the future
-        self.messagePadLength = 512
-        self.messageLength = 1900
+        self.messagePadLength = 8192
+        self.messageLength = 1800 #A bit less than 4x bcs with UTF8 we can use 4B/char, and we need some size for overhead stuff
         self.knownUsers = []
         self.databaseName = f"Peer{identifier}Database.db"
         self.publicKey = None
@@ -215,7 +215,7 @@ class Peer():
                 
                 messageRaw = peerSocket.recv(self.messagePadLength)
                 if(messageRaw != b""):
-                    self.logger.debug(f"messageRaw in ListenForMessages : {messageRaw}")
+                    #self.logger.debug(f"messageRaw in ListenForMessages : {messageRaw}")
                     message = json.loads(messageRaw.rstrip(b"\0").decode())
                     self.logger.debug(f"message in ListenForMessages : {message}")
                     nonce = base64.b64decode(message["nonce"])
@@ -362,10 +362,6 @@ class Peer():
                 
                 threading.Thread(target = self.ListenForMessages, args=(peerSocket, senderIdentifier, sBytes, AESKey, senderPublicKey), daemon=True).start()
                 threading.Thread(target=self.MessageSender, args=(AESKey, sBytes, peerSocket, senderIdentifier)).start()
-                sleep(6)
-                self.logger.info("Sending Return Message in HandleIncomingConnection")
-                self.messagingQueues[senderIdentifier].put("TEST RETURN MESSAGE" + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                
         except Exception as e:
             self.logger.error(f"Error {e} in HandleIncomingConnection", exc_info=True)
         finally:
@@ -533,16 +529,6 @@ class Peer():
             
             threading.Thread(target = peer.ListenForMessages, args=(outputSocket, recipientIdentifier, sBytes, AESKey, recipientPublicKey), daemon=False).start()
             threading.Thread(target=self.MessageSender, args=(AESKey, sBytes, outputSocket, recipientIdentifier)).start()
-            #Sending message
-            #TODO : make proper messaging system       
-            self.messagingQueues[recipientIdentifier].put("TEST MESSAGE" + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            
-            self.logger.debug("Added First Message to self.MessagingQueues")
-            #!TEMP - FOR TESTING
-            sleep(2)
-            self.messagingQueues[recipientIdentifier].put("TEST MESSAGE" + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            self.logger.debug("Added Second Message to self.MessagingQueues")
-
         except Exception as e:
             self.logger.error(f"Error {e} in StartSession", exc_info=True)
         finally:
@@ -703,7 +689,8 @@ def GetDetails():
                 "identifier" : identifier,
                 "theme" : details["theme"],
                 "publicKey" : base64.b64encode(publicKeyDisplay).decode(),
-                "displayName" : displayName
+                "displayName" : displayName,
+                "maxMessageLength" : peer.messageLength
             })
         
     except Exception as e:
@@ -775,9 +762,11 @@ def SendMessageToUser(otherUserID):
     content = request.json  # Get JSON from the request body
     
     message = content["message"]
+    peer.logger.debug(f"MESSAGE TO SEND TO {otherUserID}: {message}")    
     
-    peer.logger.debug(f"MESSAGE TO SEND TO {otherUserID}: {message}")
-        
+    peer.messagingQueues[otherUserID].put(message)
+    peer.logger.debug("Added message to message Queue")
+
     return jsonify({"status" : "success"})
 
 if __name__ == "__main__":
@@ -795,6 +784,6 @@ if __name__ == "__main__":
     if(keyToVisualise.strip() != ""):
         peer.logger.info(peer.VisualisePublicKey(keyToVisualise))
     
-    shouldSend = input("SHOULD SEND?")
+    shouldSend = input("SHOULD START SESSION?")
     if(shouldSend == "Y"):
         peer.StartSession()
