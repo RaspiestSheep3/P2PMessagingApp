@@ -7,6 +7,7 @@ if (require('electron-squirrel-startup')) {
 }
 
 let mainWindow;
+let backendPort = "";
 
 const createWindow = () => {
   const iconPath = path.join(__dirname, 'icons', 'favicon.ico'); 
@@ -16,7 +17,7 @@ const createWindow = () => {
   //!TEMP - FOR TESTING - TO REMOVE
   // Extract backendPort from process.argv
   const backendPortArg = process.argv.find(arg => arg.startsWith('backendPort='));
-  const backendPort = backendPortArg ? backendPortArg.split('=')[1] : '';
+  backendPort = backendPortArg ? backendPortArg.split('=')[1] : '';
 
 
   console.log("Index is passing backendPort:", backendPort);
@@ -34,7 +35,7 @@ const createWindow = () => {
   });
 
   // and load the index.html of the app.
-  mainWindow.loadFile(path.join(__dirname, 'index.html'));
+  mainWindow.loadURL(`http://localhost:${Number(backendPort)}/api/LoadPage/index.html`);
 
   // Open the DevTools.
   mainWindow.webContents.openDevTools();
@@ -69,5 +70,5 @@ app.on('window-all-closed', () => {
 const { ipcMain } = require('electron');
 
 ipcMain.on('navigate-to', (event, page) => {
-  mainWindow.loadFile(page);
+  mainWindow.loadURL(`http://localhost:${Number(backendPort)}/api/LoadPage/${page}`);
 });

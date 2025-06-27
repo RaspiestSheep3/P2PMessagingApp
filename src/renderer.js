@@ -7,13 +7,14 @@ let currentTheme = null;
 let publicKey = null;
 let displayName = null;
 let targetedUserIdentifier = null;
+let sendNotifications = false;
 let maxMessageLength = 0;
 
 //Consts 
 const stylesheet = document.documentElement.style;
-
-//Display Variables
-const maxThemeButtonsInRow = 4;
+const now = new Date();
+const maxThemeButtonsInRow = 4; 
+const notificationMaxLengthChars = 37;
 
 //!TEMP - FOR TESTING MULTIPLE USERS
 const backendPort = window.myAPI.backendPort;
@@ -31,6 +32,7 @@ async function GetDetails() {
     publicKey = data["publicKey"]
     displayName = data["displayName"]
     maxMessageLength = data["maxMessageLength"]
+    sendNotifications = data["sendNotifications"].toLowerCase() === "true"
 
   } catch (error) {
       console.error("Fetch error:", error);
@@ -40,17 +42,17 @@ async function GetDetails() {
 function SetSidebar() {
     //Chat page
     document.getElementById('chatIcon').addEventListener('click', () => {
-        window.electronAPI.navigateTo('src/index.html');
+        window.electronAPI.navigateTo('index.html');
     });
 
     //Settings page
     document.getElementById('settingsIcon').addEventListener('click', () => {
-        window.electronAPI.navigateTo('src/settings.html');
+        window.electronAPI.navigateTo('settings.html');
     });
 
     //Key Display page
     document.getElementById('keyIcon').addEventListener('click', () => {
-        window.electronAPI.navigateTo('src/keydisplay.html');
+        window.electronAPI.navigateTo('keydisplay.html');
     });
 }
 
@@ -121,7 +123,7 @@ function DisplayMessages(messagesToDisplay, messagerIdentifier, chatID, banner="
 
         if(messageToDisplay[1] === identifier) div.classList.add("messageOutgoing");
         else div.classList.add("messsageIncoming");
-        div.textContent = messageToDisplay[2];
+        div.innerHTML = messageToDisplay[2].replaceAll("\n", "<br>");
         chat.appendChild(div);
     });
 
@@ -251,6 +253,12 @@ async function SendMessage(messageBox, otherUserIdentifier) {
         body: JSON.stringify({"message" : messageBox.value})
     });
   console.log(response);
+
+  const pad = (n) => n.toString().padStart(2, '0');
+  const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate)} ${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+  messages.push([timestamp, identifier, messageBox.value]);
+  DisplayMessages(messages, targetedUserIdentifier, "chat", "contactBannerText");
+
   messageBox.value = "";
 }
 
@@ -330,6 +338,33 @@ async function InitKeyDisplay(){
 }
 
 const page = document.querySelector('meta[name="viewport"]').dataset.page;
+
+const socket = io();
+
+socket.on('newMessageIncoming', (msg) => {
+  console.debug(`New message recieved at ${msg.timestamp} from ${msg.senderIdentifier} : ${msg.message}`);
+  console.debug(`page = ${page}, targetedUserIdentifier = ${targetedUserIdentifier}, ${targetedUserIdentifier == msg.senderIdentifier}`);
+  if(page === "chat" && targetedUserIdentifier === msg.senderIdentifier){
+    console.debug("Now refreshing messages");
+    messages.push([msg.timestamp, msg.senderIdentifier, msg.message]);
+    console.debug(`${typeof(messages)}`);
+    DisplayMessages(messages, targetedUserIdentifier, "chat", "contactBannerText")
+  }
+
+  //Notification
+  console.debug(`SEND NOTIFICATIONS : ${sendNotifications}`);
+  if(sendNotifications){
+    let notificationBody = msg.message.slice(0, notificationMaxLengthChars);
+    if(notificationBody.length + 3 < msg.message.length) notificationBody += "...";
+    else notificationBody = msg.message.slice(0, notificationMaxLengthChars + 3);
+    new Notification(`New Message from ${msg.senderIdentifier}`, 
+      { "body" : notificationBody,
+        "icon" : `http://localhost:${backendPort}/api/static/icons/favicon.ico`
+      });
+  }
+
+});
+
 console.log(`PAGE : ${page}`);
 if(page === "chat") InitChat();
 else if(page === "settings") InitSettings();

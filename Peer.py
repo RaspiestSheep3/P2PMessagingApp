@@ -13,7 +13,8 @@ import sqlite3
 import re
 import keyring
 import queue
-from flask import Flask, jsonify, Response, request
+from flask import Flask, jsonify, request, render_template, send_from_directory
+from flask_socketio import SocketIO
 from flask_cors import CORS
 from datetime import datetime
 from cryptography.fernet import Fernet
@@ -37,7 +38,7 @@ displayName = input("DISPLAY NAME : ")
 incomingConnectionPortGlobal = int(input("INCOMING CONNECTION PORT : "))
 
 class Peer():
-    def __init__ (self, incomingConnectionHost="0.0.0.0", incomingConnectionPort = incomingConnectionPortGlobal):
+    def __init__ (self, incomingConnectionHost="0.0.0.0", incomingConnectionPort = incomingConnectionPortGlobal, socketioInstance = None):
         self.connections = []
         self.incomingConnectionSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.incomingConnectionHost = incomingConnectionHost
@@ -58,6 +59,7 @@ class Peer():
         self.openConnectionsLock = threading.Lock()
         self.messagingQueues = {}
         self.connectionLocks = {}
+        self.socketio = socketioInstance
         
         #Logging setup
         self.logFormatter = colorlog.ColoredFormatter(
@@ -253,6 +255,14 @@ class Peer():
                     #Adding message to the SQL
                     cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, message) VALUES (?, ?, ?)", (timestamp, senderIdentifier, messageFernet))
                     conn.commit()
+                    
+                    #Alerting frontend about the new message
+                    socketio.emit("newMessageIncoming", {
+                        "timestamp" : timestamp,
+                        "senderIdentifier" : senderIdentifier,
+                        "message" : plaintext
+                    })
+                    
         except Exception as e:
             self.logger.error(f"Error {e} in ListenForMessages", exc_info=True)
         finally:
@@ -662,18 +672,33 @@ class Peer():
                 return False
         return True
 
-peer = Peer()
 
 #FLASK
-app = Flask(__name__)
+app = Flask(__name__, template_folder='src', static_folder='src')
+app.config['SECRET_KEY'] = 'secret' #!TEMP - MAKE A BETTER KEY 
 CORS(app)  # Allows cross-origin requests
+socketio = SocketIO(app)
+
+peer = Peer(socketioInstance=socketio)
 
 peerDetailsFilename = f"Peer{identifier}Details.json"
 
 #Making sure we have a peerDetailsFilename file
 if not os.path.exists(peerDetailsFilename):
     with open(peerDetailsFilename, "w") as fileHandle:
-        json.dump({"theme" : "Sea"}, fileHandle, indent=4)
+        json.dump(
+        {   "theme" : "Sea",
+            "sendNotifications" : "True"
+        }, fileHandle, indent=4) 
+
+@app.route('/api/LoadPage/<page>')
+def index(page):
+    peer.logger.debug(f"page in index : {page}")
+    return send_from_directory(app.template_folder, page) 
+
+@app.route('/api/static/icons/<filename>')
+def SendIcon(filename):
+    return send_from_directory('src/icons', filename)
 
 @app.route('/api/GetDetails', methods=['GET'])
 def GetDetails():
@@ -688,6 +713,7 @@ def GetDetails():
             return jsonify({
                 "identifier" : identifier,
                 "theme" : details["theme"],
+                "sendNotifications" : details["sendNotifications"],
                 "publicKey" : base64.b64encode(publicKeyDisplay).decode(),
                 "displayName" : displayName,
                 "maxMessageLength" : peer.messageLength
@@ -773,7 +799,7 @@ if __name__ == "__main__":
     #Starting Website
     frontendPort = int(input("FRONTEND PORT : "))
     peer.logger.debug("STARTING WEBSITE")
-    threading.Thread(target = app.run, kwargs={"port": int(frontendPort), "debug": False}).start()
+    threading.Thread(target = socketio.run, kwargs={"app" : app, "port": int(frontendPort), "debug": False}).start()
     
     peer.logger.debug("STARTING UP")
     peer.Start()
