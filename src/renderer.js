@@ -9,6 +9,7 @@ let displayName = null;
 let targetedUserIdentifier = null;
 let sendNotifications = false;
 let maxMessageLength = 0;
+let use12hFormat = false;
 
 //Consts 
 const stylesheet = document.documentElement.style;
@@ -33,6 +34,7 @@ async function GetDetails() {
     displayName = data["displayName"]
     maxMessageLength = data["maxMessageLength"]
     sendNotifications = data["sendNotifications"].toLowerCase() === "true"
+    use12hFormat = data["use12hFormat"].toLowerCase() === "true"
 
   } catch (error) {
       console.error("Fetch error:", error);
@@ -123,7 +125,23 @@ function DisplayMessages(messagesToDisplay, messagerIdentifier, chatID, banner="
 
         if(messageToDisplay[1] === identifier) div.classList.add("messageOutgoing");
         else div.classList.add("messsageIncoming");
+        
+        let messageTimestampArray = (messageToDisplay[0].split(" ")[1]).split(":");
+        console.debug(`Message timestamp array: ${messageTimestampArray}`);
+
+        let ending = "";
+        if(use12hFormat){
+          if(Number(messageTimestampArray[0]) >= 12){ 
+            ending = "PM";
+            if(Number(messageTimestampArray[0]) > 13) messageTimestampArray[0] = String(Number(messageTimestampArray[0] - 12));
+          }
+          else ending = "AM";
+        }
+        
+        let messageTimestamp = messageTimestampArray[0].padStart(2, '0') + ":" + messageTimestampArray[1].padStart(2, '0') + ending;
+        
         div.innerHTML = messageToDisplay[2].replaceAll("\n", "<br>");
+        div.innerHTML = div.innerHTML + `<div class="timestamp">${messageTimestamp}</div>`;
         chat.appendChild(div);
     });
 
@@ -156,24 +174,24 @@ function UpdateCSSTheme(newTheme) {
   stylesheet.setProperty("--accentColour", themeValues["accent"]);
 }
 
-async function SetTheme(newTheme) {
+async function SetSetting(key, newValue) {
  try {
-    const response = await fetch(`http://127.0.0.1:${backendPort}/api/Post/SetTheme`, {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/Post/SetSetting`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({"newTheme" : newTheme})
+        body: JSON.stringify({"key" : key, "value" : newValue})
     });
 
     const data = await response.json();
-    console.log("POST Response in SetTheme:", data);
+    console.log("POST Response in SetSetting:", data);
     
   } catch (error) {
     console.error("Error posting data:", error);
   }
 
-  UpdateCSSTheme(newTheme);
+  if(key === "theme") UpdateCSSTheme(newValue);
 }
 
 function SetThemeButtons() {
@@ -190,7 +208,7 @@ function SetThemeButtons() {
       themeButton.textContent = themeButtonData;
       themeButton.addEventListener("click", () => {
         console.log(`${themeButton.id} SELECTED`);
-        SetTheme(themeButton.id);
+        SetSetting("theme", themeButton.id);
       });
       themeRow.appendChild(themeButton);
       console.debug(themeButtonData);
@@ -255,7 +273,7 @@ async function SendMessage(messageBox, otherUserIdentifier) {
   console.log(response);
 
   const pad = (n) => n.toString().padStart(2, '0');
-  const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate)} ${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+  const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
   messages.push([timestamp, identifier, messageBox.value]);
   DisplayMessages(messages, targetedUserIdentifier, "chat", "contactBannerText");
 
@@ -276,6 +294,29 @@ function SetupMessenger() {
   messageSendButton.addEventListener("click", () => {
      charCount.textContent = `0/${maxMessageLength}`;
     SendMessage(messageBox, targetedUserIdentifier);
+  });
+}
+
+function SetupSettingButtons() { 
+  SetThemeButtons();
+  console.log("SET THEME BUTTONS IN SetupSettingButtons");
+  
+  //Setting notification buttons
+  const switchInput = document.querySelector('#notificationSwitchButton input[type="checkbox"]');
+  switchInput.checked = sendNotifications;
+
+  switchInput.addEventListener('change', (event) => {
+    sendNotifications = event.target.checked;
+    SetSetting("sendNotifications", String(sendNotifications));
+  });
+
+  //Setting 12h format buttons
+  const hourFormatInput = document.querySelector('#hourFormatSwitchButton input[type="checkbox"]');
+  hourFormatInput.checked = use12hFormat;
+
+  hourFormatInput.addEventListener('change', (event) => {
+    use12hFormat = event.target.checked;
+    SetSetting("use12hFormat", String(use12hFormat));
   });
 }
 
@@ -308,8 +349,8 @@ async function InitSettings(){
   console.debug("GOT THEMES");
   UpdateCSSTheme(currentTheme);
   console.debug("SET CURRENT THEME");
-  SetThemeButtons();
-  console.log("SET THEME BUTTONS");
+  SetupSettingButtons();
+  console.debug("Set Setting Buttons")
 }
 
 async function InitKeyDisplay(){

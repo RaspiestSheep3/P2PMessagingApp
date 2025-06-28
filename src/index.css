@@ -130,12 +130,16 @@ body {
 
 .message {
   max-width: 50%;
+  min-width: 60px;
   width: fit-content;
   border: 2px solid var(--mainColour);
-  border-radius: 20px;
+  border-radius: 10px;
   padding: 5px;
+  padding-bottom: 20px;
   margin: 5px;
   font-weight: 500;
+  font-size: 15px;
+  position: relative;
 }
 
 .messageIncoming {
@@ -235,6 +239,7 @@ body {
 
 .settingsSection {
   width: 100%;
+  margin-bottom: 20px;
 }
 
 .themeButton {
@@ -331,7 +336,10 @@ body {
   border: 2px solid var(--accentColour);
   border-radius: 30px;
   height: 68%;
- overflow-y: scroll;
+  overflow-y: scroll;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
 }
 
 #otherUserOverviewRecentMessages::-webkit-scrollbar { 
@@ -348,4 +356,100 @@ body {
 
 .selfInfoText {
   color : var(--accentColour);
+}
+
+/*Switch Settings*/
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 60px;
+  height: 20px;
+  border: 2px solid var(--accentColour);
+  border-radius: 20px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--backgroundColour);
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 12px;
+  width: 12px;
+  left: 4px;
+  bottom: 4px;
+  background-color: var(--backgroundColour);
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+input:not(:checked) + .slider:before {
+  background-color: var(--accentColour);
+}
+
+input:checked + .slider {
+  background-color: var(--accentColour);
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px var(--accentColour);
+}
+
+input:checked + .slider:before {
+  -webkit-transform: translateX(42px);
+  -ms-transform: translateX(42px);
+  transform: translateX(42px);
+}
+
+.slider.round {
+  border-radius: 34px;
+}
+
+.slider.round:before {
+  border-radius: 50%;
+}
+
+#chatSettings {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.switchDiv {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  width: 50%;
+  padding: 10px 20px; /* optional spacing */
+}
+
+.settingsLabel {
+  margin-right: 20px; /* space between label and switch */
+  font-size: 20px;
+}
+
+.timestamp{
+  position: absolute;
+  bottom: 4px;
+  right: 8px;
+  font-size: 12px;
+  color: var(--mainColour);
+  pointer-events: none;
+  background-color: var(--backgroundColour);
 }

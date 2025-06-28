@@ -688,7 +688,8 @@ if not os.path.exists(peerDetailsFilename):
     with open(peerDetailsFilename, "w") as fileHandle:
         json.dump(
         {   "theme" : "Sea",
-            "sendNotifications" : "True"
+            "sendNotifications" : "true",
+            "use12hFormat" : "false"
         }, fileHandle, indent=4) 
 
 @app.route('/api/LoadPage/<page>')
@@ -714,6 +715,7 @@ def GetDetails():
                 "identifier" : identifier,
                 "theme" : details["theme"],
                 "sendNotifications" : details["sendNotifications"],
+                "use12hFormat" : details["use12hFormat"],
                 "publicKey" : base64.b64encode(publicKeyDisplay).decode(),
                 "displayName" : displayName,
                 "maxMessageLength" : peer.messageLength
@@ -758,12 +760,13 @@ def GetThemes():
         peer.logger.error(f"Error {e} in GetThemes", exc_info=True)
         return jsonify({"Unexpected error - check logs"}), 500
 
-@app.route('/api/Post/SetTheme', methods=['POST'])
-def SetTheme():
+@app.route('/api/Post/SetSetting', methods=['POST'])
+def SetSetting():
     content = request.json  # Get JSON from the request body
+    key = content["key"]
     with open(peerDetailsFilename, "r") as fileHandle:
         details = json.load(fileHandle)
-    details["theme"] = content["newTheme"]
+    details[key] = content["value"]
     with open(peerDetailsFilename, "w") as fileHandle:
         json.dump(details, fileHandle, indent=4)
         
