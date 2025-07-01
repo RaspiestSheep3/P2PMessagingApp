@@ -10,6 +10,7 @@ let targetedUserIdentifier = null;
 let sendNotifications = false;
 let maxMessageLength = 0;
 let use12hFormat = false;
+let activeSessions = [];
 
 //Consts 
 const stylesheet = document.documentElement.style;
@@ -94,7 +95,7 @@ async function GetDisplayMessages(id, chatID, banner, amount=0, sort="asc", reve
   console.debug("DISPLAYING MESSAGES");
 }
 
-function DisplaySetUsers(id, chatID, banner="", amount = 0, sort = "asc" ,reversed = "false") {
+function DisplaySetUsers(id, chatID, banner="", amount = 0, sort = "asc" ,reversed = "false", sessionButton=false) {
   let chatListUL = document.getElementById(id);
   chatListUL.innerHTML = "";
 
@@ -108,6 +109,7 @@ function DisplaySetUsers(id, chatID, banner="", amount = 0, sort = "asc" ,revers
     li.addEventListener("click",() => {
       targetedUserIdentifier = li.id;
       GetDisplayMessages(li.id, chatID, banner, amount, sort, reversed);
+      if(sessionButton) SetSessionButton(li.id);
     });
     chatListUL.appendChild(li);
     savedUsersLi.push(li);
@@ -320,6 +322,70 @@ function SetupSettingButtons() {
   });
 }
 
+async function ChangeSession(otherUserIdentifier, type){
+  const response = await fetch(`http://127.0.0.1:${backendPort}/api/Post/ChangeSession`, {
+      method: 'POST',
+      headers: {
+          'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({"identifier" : otherUserIdentifier, "type" : type})
+  });
+  console.log(response);
+}
+
+function SetSessionButton(otherUserIdentifier) {
+  const buttonElement = document.getElementById("StartSessionButton");
+  if(activeSessions.includes(otherUserIdentifier)) buttonElement.textContent = "End Session";
+  else buttonElement.textContent = "Start Session";
+  buttonElement.addEventListener("click", () => {
+    if(activeSessions.includes(otherUserIdentifier)){
+      console.debug("Closing session");
+      activeSessions.splice(activeSessions.indexOf(otherUserIdentifier), 1);
+      buttonElement.textContent = "Start Session";
+      ChangeSession(otherUserIdentifier, "end");
+    }
+    else {
+      console.debug("Starting session");
+      activeSessions.push(otherUserIdentifier);
+      buttonElement.textContent = "End Session";
+      ChangeSession(otherUserIdentifier, "start");
+    }
+  });
+}
+
+async function SendNewUserRequest(host, port) {
+  const response = await fetch(`http://127.0.0.1:${backendPort}/api/Post/AddNewUser`, {
+      method: 'POST',
+      headers: {
+          'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({"host" : host.value, "port" : port.value})
+  });
+  host.value = "";
+  port.value = "";
+  console.log(response);
+
+  savedUsers = await GetSavedUsers();
+  savedUsersMap = new Map(savedUsers);
+  console.debug("GOT SAVED USERS in SendNewUserRequest");
+  DisplaySetUsers("chatlistUL", "chat", "contactBannerText",0,"asc","false",true);
+  console.debug("DISPLAYED SAVED USERS in SendNewUserRequest")
+
+}
+
+function SetAddUserButton(){
+  const addUserButton = document.getElementById("AddUserButton");
+  const hostInput = document.getElementById("addUserHostInput");
+  const portInput = document.getElementById("addUserPortInput");
+
+  addUserButton.addEventListener("click", () => {
+    console.log("Adding User");
+    if((hostInput.value.trim() != "") && (portInput.value.trim() != "") && (/^-?\d+$/.test(portInput.value.trim()))){
+      SendNewUserRequest(hostInput, portInput);
+    }
+  });
+}
+
 async function InitChat() {
   await GetDetails();
   console.debug("GOT DETAILS");
@@ -328,12 +394,14 @@ async function InitChat() {
   savedUsers = await GetSavedUsers();
   savedUsersMap = new Map(savedUsers);
   console.debug("GOT SAVED USERS");
-  DisplaySetUsers("chatlistUL", "chat", "contactBannerText");
+  DisplaySetUsers("chatlistUL", "chat", "contactBannerText",0,"asc","false",true);
   console.debug("DISPLAYED SAVED USERS")
   UserSearchBar(document.getElementById("chatlistUL"), document.getElementById("searchForUserInput"));
   console.debug("SET SEARCH BAR");
-   SetupMessenger();
+  SetupMessenger();
   console.debug("SET MESSENGER");
+  SetAddUserButton();
+  console.debug("Set Add User Button");
   themes = await GetThemes();
   console.debug("GOT THEMES");
   UpdateCSSTheme(currentTheme);

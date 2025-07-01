@@ -13,10 +13,11 @@ import sqlite3
 import re
 import keyring
 import queue
-from flask import Flask, jsonify, request, render_template, send_from_directory
+from datetime import datetime
+from dataclasses import dataclass
+from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO
 from flask_cors import CORS
-from datetime import datetime
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -24,9 +25,6 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.exceptions import InvalidSignature
-
-#!TEMP 
-from time import sleep
 
 #!TEMP - MAKE BETTER SYSTEM FOR IDENTIFICATION
 identifier = input("PEER IDENTIFIER : ")
@@ -36,6 +34,14 @@ displayName = input("DISPLAY NAME : ")
 
 #!TEMP - MAKE BETTER WAY TO SET LISTEN PORT
 incomingConnectionPortGlobal = int(input("INCOMING CONNECTION PORT : "))
+
+@dataclass
+class PeerDetail:
+    identifier: str
+    publicKey: str
+    displayName : str
+    host: str
+    port: int
 
 class Peer():
     def __init__ (self, incomingConnectionHost="0.0.0.0", incomingConnectionPort = incomingConnectionPortGlobal, socketioInstance = None):
@@ -47,7 +53,7 @@ class Peer():
         self.activeConnectionThreads = []
         self.DHEBitLength = 512 #TODO : Consider 1024 in the future
         self.messagePadLength = 8192
-        self.messageLength = 1800 #A bit less than 4x bcs with UTF8 we can use 4B/char, and we need some size for overhead stuff
+        self.messageLength = 1900 #A bit less than 4x bcs with UTF8 we can use 4B/char, and we need some size for overhead stuff
         self.knownUsers = []
         self.databaseName = f"Peer{identifier}Database.db"
         self.publicKey = None
@@ -104,7 +110,7 @@ class Peer():
         try:
             self.incomingConnectionSocket.bind((self.incomingConnectionHost, self.incomingConnectionPort))
             self.incomingConnectionSocket.listen(5)
-            self.logger.info("SERVER STARTED UP")
+            self.logger.info("PEER STARTED UP")
             
             #SQL
             conn = sqlite3.connect(self.databaseName)
@@ -113,13 +119,15 @@ class Peer():
                 CREATE TABLE IF NOT EXISTS savedUsers (
                     identifier STRING NOT NULL UNIQUE,
                     publicKey BLOB NOT NULL,
-                    displayName TEXT NOT NULL
+                    displayName TEXT NOT NULL,
+                    host TEXT NOT NULL,
+                    port INTEGER NOT NULL
                 )
             ''')
 
             cursor.execute("SELECT * FROM savedUsers")
             rows = cursor.fetchall()
-            self.knownUsers = {row[0] : row[1] for row in rows}
+            self.knownUsers = {row[0] : PeerDetail(row[0], row[1], row[2], row[3], row[4]) for row in rows}
 
             # Commit changes and close the connection
             conn.commit()
@@ -179,7 +187,7 @@ class Peer():
                         format=serialization.PublicFormat.Raw
                     ).hex()
             elif(userIdentifier in self.knownUsers):
-                key = (self.knownUsers[userIdentifier]).hex()
+                key = (self.knownUsers[userIdentifier].publicKey).hex()
             
             if(key != None):
                 key = ":".join(key[i:i+4] for i in range(0, len(key), 4)) #Writes as abcd:1234:efgh
@@ -207,61 +215,72 @@ class Peer():
         try:
             conn = sqlite3.connect(self.databaseName)
             cursor = conn.cursor()
-            while True:
+            while (senderIdentifier in self.openConnections) and (peerSocket.fileno() != -1):
                 #with self.connectionLocks[senderIdentifier]:
                 self.logger.debug(f"Sender Identifier in ListenForMessages is {senderIdentifier}")
                 
                 if peerSocket.fileno() == -1: #Checks if the connections open
-                    self.logger.error(f"{senderIdentifier} socket is closed")
+                    self.logger.warning(f"{senderIdentifier} socket is closed in ListenForMessages")
                     return
+                with self.connectionLocks[senderIdentifier]:
+                    if(senderIdentifier not in self.openConnections):
+                        return
+                    messageRaw = peerSocket.recv(self.messagePadLength)
                 
-                messageRaw = peerSocket.recv(self.messagePadLength)
-                if(messageRaw != b""):
+                if(messageRaw == b""):
+                    return
+                else:
                     #self.logger.debug(f"messageRaw in ListenForMessages : {messageRaw}")
                     message = json.loads(messageRaw.rstrip(b"\0").decode())
-                    self.logger.debug(f"message in ListenForMessages : {message}")
-                    nonce = base64.b64decode(message["nonce"])
-                    hmacTag = base64.b64decode(message["hmacTag"])
-                    signature = base64.b64decode(message["signature"])
-                    ciphertext = base64.b64decode(message["ciphertext"])
-                    timestamp = message["timestamp"]
-                    
-                    #HMAC test   
-                    expectedHmacTag = hmac.new(sBytes, ciphertext, hashlib.sha256).digest()
-                    if hmac.compare_digest(hmacTag, expectedHmacTag):
-                        self.logger.info("HMAC TAG CORRECT")
-                    else:
-                        self.logger.error("HMAC TAG INCORRECT - DATA TAMPERED OR FORGED")
+                    if(message["type"] == "socketClose"):
+                        self.logger.warning(f"Shutting connection with {senderIdentifier}")
+                        peerSocket.shutdown(socket.SHUT_RDWR)
+                        peerSocket.close()
                         return
+                    elif(message["type"] == "message"):
+                        self.logger.debug(f"message in ListenForMessages : {message}")
+                        nonce = base64.b64decode(message["nonce"])
+                        hmacTag = base64.b64decode(message["hmacTag"])
+                        signature = base64.b64decode(message["signature"])
+                        ciphertext = base64.b64decode(message["ciphertext"])
+                        timestamp = message["timestamp"]
                         
-                    #Decrypting ciphertext
-                    aesGCM = AESGCM(AESKey)
-                    plaintext = aesGCM.decrypt(nonce, ciphertext, None).decode()
-                    
-                    #Signature test
-                    try:
-                        self.logger.warning(f"SIGNATURE (DELETE THIS) : {senderPublicKey} {type(senderPublicKey)}")
-                        senderPublicKey.verify(signature, plaintext.encode())
-                    except InvalidSignature:
-                        self.logger.critical(f"INVALID SIGNATURE - DO NOT TRUST")
-                        return
-                    
-                    self.logger.info(f"RECIEVED PLAINTEXT {plaintext} which was sent at {timestamp}")
-                    
-                    #Encrypting the message with Fernet
-                    cipher = Fernet(self.fernetKey)
-                    messageFernet = cipher.encrypt(plaintext.encode())
-                    
-                    #Adding message to the SQL
-                    cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, message) VALUES (?, ?, ?)", (timestamp, senderIdentifier, messageFernet))
-                    conn.commit()
-                    
-                    #Alerting frontend about the new message
-                    socketio.emit("newMessageIncoming", {
-                        "timestamp" : timestamp,
-                        "senderIdentifier" : senderIdentifier,
-                        "message" : plaintext
-                    })
+                        #HMAC test   
+                        expectedHmacTag = hmac.new(sBytes, ciphertext, hashlib.sha256).digest()
+                        if hmac.compare_digest(hmacTag, expectedHmacTag):
+                            self.logger.info("HMAC TAG CORRECT")
+                        else:
+                            self.logger.error("HMAC TAG INCORRECT - DATA TAMPERED OR FORGED")
+                            return
+                            
+                        #Decrypting ciphertext
+                        aesGCM = AESGCM(AESKey)
+                        plaintext = aesGCM.decrypt(nonce, ciphertext, None).decode()
+                        
+                        #Signature test
+                        try:
+                            self.logger.warning(f"SIGNATURE (DELETE THIS) : {senderPublicKey} {type(senderPublicKey)}")
+                            senderPublicKey.verify(signature, plaintext.encode())
+                        except InvalidSignature:
+                            self.logger.critical(f"INVALID SIGNATURE - DO NOT TRUST")
+                            return
+                        
+                        self.logger.info(f"RECIEVED PLAINTEXT {plaintext} which was sent at {timestamp}")
+                        
+                        #Encrypting the message with Fernet
+                        cipher = Fernet(self.fernetKey)
+                        messageFernet = cipher.encrypt(plaintext.encode())
+                        
+                        #Adding message to the SQL
+                        cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, message) VALUES (?, ?, ?)", (timestamp, senderIdentifier, messageFernet))
+                        conn.commit()
+                        
+                        #Alerting frontend about the new message
+                        socketio.emit("newMessageIncoming", {
+                            "timestamp" : timestamp,
+                            "senderIdentifier" : senderIdentifier,
+                            "message" : plaintext
+                        })
                     
         except Exception as e:
             self.logger.error(f"Error {e} in ListenForMessages", exc_info=True)
@@ -289,14 +308,18 @@ class Peer():
                 
                 if(shouldRequestKey):
                     self.logger.debug("REQUESTING KEY")
-                    senderPublicKey = json.loads(peerSocket.recv(128).rstrip(b"\0").decode())["publicKey"]
+                    senderDetails = json.loads(peerSocket.recv(128).rstrip(b"\0").decode())
+                    senderPublicKey = senderDetails["publicKey"]
                     senderPublicKey = base64.b64decode(senderPublicKey)
                     
+                    senderHost = senderDetails["host"]
+                    senderPort = senderDetails["port"]
+                    
                     #Updating SQL
-                    cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName) VALUES (?, ?, ?)", (senderIdentifier, senderPublicKey, details["displayName"]))
+                    cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName, host, port) VALUES (?, ?, ?, ?, ?)", (senderIdentifier, senderPublicKey, details["displayName"], senderHost, senderPort))
                     
                     conn.commit()
-                    self.knownUsers[senderPublicKey] = senderPublicKey #Adding to dict
+                    self.knownUsers[senderIdentifier] = PeerDetail(senderIdentifier, senderPublicKey, details["displayName"], senderHost, senderPort) #Adding to dict
                 else:
                     self.logger.debug(f"ALREADY HAVE KEY FOR {senderIdentifier}")
                     cursor.execute("SELECT * FROM savedUsers WHERE identifier = ?", (senderIdentifier,))
@@ -313,7 +336,7 @@ class Peer():
                         format=serialization.PublicFormat.Raw
                     )
                     
-                    peerSocket.send(json.dumps({"type" : "recipientPublicKeyResponse", "recipientPublicKey" : base64.b64encode(selfPublicKey).decode(), "displayName" : displayName}).encode().ljust(256, b"\0"))
+                    peerSocket.send(json.dumps({"type" : "recipientPublicKeyResponse", "recipientPublicKey" : base64.b64encode(selfPublicKey).decode(), "displayName" : displayName, "host" : peerSocket.getsockname()[0], "port" : self.incomingConnectionPort}).encode().ljust(256, b"\0"))
                 
                 payload = json.loads(peerSocket.recv(incomingPayloadLength).rstrip(b"\0").decode())
                 self.logger.debug(f"PAYLOAD {payload}")
@@ -377,12 +400,12 @@ class Peer():
         finally:
             conn.close()
     
-    def MessageSender(self, AESKey, sBytes, outputSocket, recipientIdentifer):
-        messageQueue = self.messagingQueues[recipientIdentifer]
+    def MessageSender(self, AESKey, sBytes, outputSocket, recipientIdentifier):
+        messageQueue = self.messagingQueues[recipientIdentifier]
         while True:
             messageData = messageQueue.get().encode()
-            self.logger.warning(f"Now Sending {messageData} to {recipientIdentifer}")
-            self.SendMessage(AESKey, sBytes, outputSocket, recipientIdentifer, messageData)
+            self.logger.warning(f"Now Sending {messageData} to {recipientIdentifier}")
+            self.SendMessage(AESKey, sBytes, outputSocket, recipientIdentifier, messageData)
     
     def SendMessage(self, AESKey, sBytes, outputSocket, recipientIdentifier, messageData):
         try:
@@ -410,14 +433,20 @@ class Peer():
         finally:
             conn.close()
     
-    def StartSession(self):
+    def StartSession(self, otherIdentifier=None, host=None, port=None):
         #TODO
         try:
             conn = sqlite3.connect(self.databaseName)
             cursor = conn.cursor()
+            
+            if(host == None and port==None):
+                host = self.knownUsers[otherIdentifier].host
+                port = self.knownUsers[otherIdentifier].port
+            
+            self.logger.debug(f"Host : {host}, Port : {port}")
+            
             outputSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            port = int(input("LISTENER PORT"))   
-            outputSocket.connect(("127.0.0.1", port))            
+            outputSocket.connect((host, port))            
             
             #Choosing the DHE p,g and a
             p = self.GeneratePrime(self.DHEBitLength)
@@ -458,7 +487,7 @@ class Peer():
                 self.logger.debug("Sending Key Request")
                 
                 
-                outputSocket.send(json.dumps({"publicKey" : base64.b64encode(publicKeyBytes).decode()}).encode().ljust(128, b"\0"))
+                outputSocket.send(json.dumps({"publicKey" : base64.b64encode(publicKeyBytes).decode(), "host" : outputSocket.getsockname()[0], "port" : self.incomingConnectionPort}).encode().ljust(128, b"\0"))
             
             if(recipientIdentifier not in self.knownUsers):
                 shouldRequestKey = True
@@ -470,14 +499,17 @@ class Peer():
                 recipientPublicKeyDetails = json.loads(outputSocket.recv(256).rstrip(b"\0").decode())
                 self.logger.debug(type(self.knownUsers))
                 recipientPublicKey = base64.b64decode(recipientPublicKeyDetails["recipientPublicKey"])
-                self.knownUsers[recipientIdentifier] = recipientPublicKey
                 self.logger.debug("REQUESTING KEY IN StartSession")
                 self.logger.debug(f"NEW knownUsers in StartSession : {self.knownUsers}")
+                recipientHost = recipientPublicKeyDetails["host"]
+                recipientPort = recipientPublicKeyDetails["port"]
             
                 #Updating SQL
-                cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName) VALUES (?, ?, ?)", (recipientIdentifier, recipientPublicKey, recipientPublicKeyDetails["displayName"]))
+                cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName, host, port) VALUES (?, ?, ?, ?, ?)", (recipientIdentifier, recipientPublicKey, recipientPublicKeyDetails["displayName"], recipientHost, recipientPort))
                 
                 conn.commit()
+                
+                self.knownUsers[recipientIdentifier] = PeerDetail(recipientIdentifier, recipientPublicKey, recipientPublicKeyDetails["displayName"], recipientHost, recipientPort)
             else:
                 outputSocket.send(json.dumps({"type" : "recipientPublicKeyNotNeeded"}).encode().ljust(64, b"\0"))
                 self.logger.debug(f"ALREADY HAVE KEY FOR {recipientIdentifier}")
@@ -543,7 +575,17 @@ class Peer():
             self.logger.error(f"Error {e} in StartSession", exc_info=True)
         finally:
             conn.close()   
+     
+    def EndSession(self, otherUserIdentifier):
+        with self.connectionLocks[otherUserIdentifier]:
+            connectionSocket = self.openConnections[otherUserIdentifier]
+            connectionSocket.send(json.dumps({"type" : "closeSocket"}).encode().ljust(self.messagePadLength, b"\0"))
+            connectionSocket.shutdown(socket.SHUT_RDWR)
+            connectionSocket.close()
+            self.openConnections.pop(otherUserIdentifier)
+            self.logger.debug(f"Removed {otherUserIdentifier} from openConnections : now {self.openConnections}")
             
+        
     def CalculateMessage(self, AESKey, plaintext, sBytes, edPrivateKey):
         try:
             nonce = os.urandom(12)
@@ -561,6 +603,7 @@ class Peer():
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
             return {
+                "type" : "message",
                 "nonce": base64.b64encode(nonce).decode(), #Doing this because json.dumps doesnt like b""
                 "hmacTag": base64.b64encode(hmacTag).decode(),
                 "signature" : base64.b64encode(signature).decode(),
@@ -621,6 +664,26 @@ class Peer():
             return rows
         except Exception as e:
             self.logger.error(f"Error {e} in ReturnSavedUsers", exc_info=True)
+
+    def AddNewUser(self, host, port):
+        try:
+            
+            #Making sure we dont know user
+            for knownUser in self.knownUsers:
+                user = self.knownUsers[knownUser]
+                if(user.host == host) and (user.port == port):
+                    return
+            
+            self.logger.debug("ADDING NEW USER")
+            self.StartSession(host=host, port=port)
+            
+            for knownUser in self.knownUsers:
+                user = self.knownUsers[knownUser]
+                if(user.host == host) and (user.port == port):
+                    self.EndSession(user.identifier)
+                    self.logger.debug(f"SUCCESSFULLY ADDED {user.identifier}")
+        except Exception as e:
+            self.logger.error(f"Error {e} in AddNewUser", exc_info=True)
 
     def GetDetailsOfUser(self, userID):
         try:
@@ -704,11 +767,6 @@ def SendIcon(filename):
 @app.route('/api/GetDetails', methods=['GET'])
 def GetDetails():
     try:
-        publicKeyDisplay = peer.publicKey.public_bytes(
-                    encoding=serialization.Encoding.Raw,
-                    format=serialization.PublicFormat.Raw
-                )
-        
         with open(peerDetailsFilename, "r") as fileHandle:
             details = json.load(fileHandle)
             return jsonify({
@@ -716,7 +774,7 @@ def GetDetails():
                 "theme" : details["theme"],
                 "sendNotifications" : details["sendNotifications"],
                 "use12hFormat" : details["use12hFormat"],
-                "publicKey" : base64.b64encode(publicKeyDisplay).decode(),
+                "publicKey" : peer.VisualisePublicKey(identifier),
                 "displayName" : displayName,
                 "maxMessageLength" : peer.messageLength
             })
@@ -776,13 +834,9 @@ def SetSetting():
 def GetDetailsOfOtherUser(otherUserID):
     details = peer.GetDetailsOfUser(otherUserID)
     detailsKey = ed25519.Ed25519PublicKey.from_public_bytes(details[1])
-    keyBytes = detailsKey.public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw
-    )
     return jsonify({
         "identifier" : details[0],
-        "publicKey" : base64.b64encode(keyBytes).decode(),
+        "publicKey" :  peer.VisualisePublicKey(details[0]),
         "displayName" : details[2] 
     })
     
@@ -798,6 +852,30 @@ def SendMessageToUser(otherUserID):
 
     return jsonify({"status" : "success"})
 
+@app.route('/api/Post/ChangeSession', methods=['POST'])
+def ChangeSession():
+    content = request.json  # Get JSON from the request body
+    identifier = content["identifier"]
+    peer.logger.debug(f"Recieved Change Session Request For {identifier}")
+    if(identifier in peer.openConnections and content["type"].lower() == "end"):
+        peer.logger.debug(f"Ending session with {identifier}")
+        peer.EndSession(identifier)
+    elif(identifier not in peer.openConnections) and (content["type"].lower() == "start"):
+        peer.logger.debug(f"Starting session with {identifier}")
+        peer.StartSession(identifier)
+    return jsonify({"status" : "success"})
+
+@app.route('/api/Post/AddNewUser', methods=['POST'])
+def AddNewUser():
+    content = request.json  # Get JSON from the request body
+    host = content["host"]
+    port = int(content["port"])
+    
+    peer.logger.debug("ADDING NEW USER")
+    peer.AddNewUser(host=host, port=port)
+    
+    return jsonify({"status" : "success"})
+
 if __name__ == "__main__":
     #Starting Website
     frontendPort = int(input("FRONTEND PORT : "))
@@ -808,11 +886,6 @@ if __name__ == "__main__":
     peer.Start()
     threading.Thread(target = peer.WaitForIncomingRequests, daemon=False).start()
     
-    #Key visualiser
-    keyToVisualise = input("Key To Visualise : ")
-    if(keyToVisualise.strip() != ""):
-        peer.logger.info(peer.VisualisePublicKey(keyToVisualise))
-    
-    shouldSend = input("SHOULD START SESSION?")
-    if(shouldSend == "Y"):
-        peer.StartSession()
+    #shouldAddUser = input("SHOULD ADD USER?")
+    #if(shouldAddUser == "Y"):
+        #peer.AddNewUser(host=input("HOST : "), port=int(input("PORT : ")))

@@ -31,17 +31,27 @@
        <input class="input" type="text" placeholder="Search For User" id="searchForUserInput">
       <ul id="chatlistUL">
       </ul>
+      <div id="AddUserZone">
+        <div id="addUserHostPortLine">
+            <input class="input addUserHostPortElement" type="text" placeholder="Host" id="addUserHostInput">
+            <input class="input addUserHostPortElement" type="text" placeholder="Port" id="addUserPortInput">
+        </div>
+        <button class="displayText button underlineFade" id="AddUserButton" aria-label="Add User">Add User</button>
+      </div>
     </div>
     <div id="chatHistory">
-      <div class="displayText" id="contactBanner">
-        <h1 id="contactBannerText"></h1>
+      <div id="contactSessionBanner">
+        <div class="displayText" id="contactBanner">
+          <h1 id="contactBannerText"></h1>
+        </div>
+        <button class="displayText button underlineFade" id="StartSessionButton" aria-label="Start Session"></button>
       </div>
       <div id="chat">
       </div>
       <div id="messagingInput">
         <div id="messagingInputFieldWrapper">
           <textarea class="displayText input" type="text" placeholder="Write your message here" id="messagingInputField"></textarea>
-          <div id="charCount">0/1800</div>
+          <div id="charCount">0/1900</div>
         </div>
         <button class="displayText button underlineFade" id="sendMessageButton">Send</button>
       </div>
