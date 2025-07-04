@@ -1,6 +1,7 @@
 let identifier = null;
 let savedUsers = null;
 let savedUsersMap = null;
+let onlineUsers = null;
 let messages = null;
 let themes = null;
 let currentTheme = null;
@@ -17,6 +18,10 @@ const stylesheet = document.documentElement.style;
 const now = new Date();
 const maxThemeButtonsInRow = 4; 
 const notificationMaxLengthChars = 37;
+const onlineDisplayDict = {
+  true : "🟢",
+  false : "🔴"
+};
 
 //!TEMP - FOR TESTING MULTIPLE USERS
 const backendPort = window.myAPI.backendPort;
@@ -66,8 +71,9 @@ async function GetSavedUsers() {
     const data = await response.json();
     
     console.log("Saved Users fetched:", data);
+    console.log(`Users : ${data.users} ${typeof(data.users)}, Online : ${data.onlineUsers}`);
 
-    return data
+    return data;
   } catch (error) {
       console.error("Fetch error:", error);
   }
@@ -104,8 +110,8 @@ function DisplaySetUsers(id, chatID, banner="", amount = 0, sort = "asc" ,revers
   savedUsers.forEach(savedUser => {
     const li = document.createElement("li");
     li.className = "displayText chatlistElement underlineFade";
-    li.id = savedUser[0];
-    li.textContent = savedUser[1];
+    li.id = savedUser[0]; 
+    li.textContent = `${savedUser[1]} ${onlineDisplayDict[onlineUsers.includes(li.id)]}`;
     li.addEventListener("click",() => {
       targetedUserIdentifier = li.id;
       GetDisplayMessages(li.id, chatID, banner, amount, sort, reversed);
@@ -149,7 +155,8 @@ function DisplayMessages(messagesToDisplay, messagerIdentifier, chatID, banner="
 
     if(banner !== "") {
       let messageLabel = document.getElementById(banner);
-      messageLabel.textContent = savedUsersMap.get(messagerIdentifier);
+      console.log(`Messanger Identifier in DisplayMessages : ${messagerIdentifier} ${onlineUsers}`);
+      messageLabel.textContent = `${savedUsersMap.get(messagerIdentifier)} ${onlineDisplayDict[onlineUsers.includes(messagerIdentifier)]}`;
     }
 }
 
@@ -365,8 +372,10 @@ async function SendNewUserRequest(host, port) {
   port.value = "";
   console.log(response);
 
-  savedUsers = await GetSavedUsers();
+  let savedUsersObject = (await GetSavedUsers())
+  savedUsers = savedUsersObject.users;
   savedUsersMap = new Map(savedUsers);
+  onlineUsers = savedUsersObject.onlineUsers;
   console.debug("GOT SAVED USERS in SendNewUserRequest");
   DisplaySetUsers("chatlistUL", "chat", "contactBannerText",0,"asc","false",true);
   console.debug("DISPLAYED SAVED USERS in SendNewUserRequest")
@@ -391,9 +400,11 @@ async function InitChat() {
   console.debug("GOT DETAILS");
   SetSidebar();
   console.debug("SET SIDEBAR");
-  savedUsers = await GetSavedUsers();
+  let savedUsersObject = (await GetSavedUsers())
+  savedUsers = savedUsersObject.users;
   savedUsersMap = new Map(savedUsers);
-  console.debug("GOT SAVED USERS");
+  onlineUsers = savedUsersObject.onlineUsers;
+  console.debug("GOT SAVED USERS and OnlineUsers");
   DisplaySetUsers("chatlistUL", "chat", "contactBannerText",0,"asc","false",true);
   console.debug("DISPLAYED SAVED USERS")
   UserSearchBar(document.getElementById("chatlistUL"), document.getElementById("searchForUserInput"));
@@ -432,8 +443,10 @@ async function InitKeyDisplay(){
   console.debug("SET CURRENT THEME");
   DisplayKeyData();
   console.debug("SET KEY DATA");
-  savedUsers = await GetSavedUsers();
+  let savedUsersObject = (await GetSavedUsers())
+  savedUsers = savedUsersObject.users;
   savedUsersMap = new Map(savedUsers);
+  onlineUsers = savedUsersObject.onlineUsers;
   console.debug("GOT SAVED USERS");
   UserSearchBar(document.getElementById("otherUsersListUL"), document.getElementById("searchForUserInput"));
   console.debug("SET SEARCH BAR");

@@ -13,6 +13,7 @@ import sqlite3
 import re
 import keyring
 import queue
+from time import sleep
 from datetime import datetime
 from dataclasses import dataclass
 from flask import Flask, jsonify, request, send_from_directory
@@ -66,6 +67,9 @@ class Peer():
         self.messagingQueues = {}
         self.connectionLocks = {}
         self.socketio = socketioInstance
+        self.onlineUsersDict = {} #Used to check which users are online
+        self.onlineUsersEventDict = {}
+        self.onlineUsersDictLock = threading.Lock()
         
         #Logging setup
         self.logFormatter = colorlog.ColoredFormatter(
@@ -174,6 +178,26 @@ class Peer():
             self.logger.warning(f"FERNET KEY (DELETE THIS) : {self.fernetKey}")
             self.logger.warning(f"KNOWN USERS (DELETE THIS) : {self.knownUsers}")
             
+            #Finding out who is online
+            with self.onlineUsersDictLock:
+                self.onlineUsersDict = {} 
+            for knownUser in self.knownUsers:
+                user = self.knownUsers[knownUser]
+                self.onlineUsersEventDict[user.identifier] = threading.Event()
+                self.logger.debug(f"Now connecting to {user}")
+                outputSocket = self.StartSession(otherIdentifier=user.identifier, isOnlineCheck=True, event=self.onlineUsersEventDict[user.identifier])
+                if(outputSocket == None):
+                    self.logger.info(f"Error starting session with {user} in Start - user is offline")
+                    continue
+                else:
+                    self.logger.info(f"User {user} is online - sending message")
+                    outputSocket.send(json.dumps({"type" : "isOnline", "identifier" : identifier}).encode().ljust(self.messagePadLength, b"\0"))
+                    self.onlineUsersEventDict[user.identifier].wait()
+                    self.EndSession(user.identifier)
+
+            with self.onlineUsersDictLock:
+                self.logger.debug(f"Online users dict in Start : {self.onlineUsersDict}")
+            
         except Exception as e:
             self.logger.error(f"Error {e} in Start", exc_info=True)
         
@@ -211,7 +235,7 @@ class Peer():
         except Exception as e:
             self.logger.error(f"Error {e} in WaitForIncomingRequests", exc_info=True)
         
-    def ListenForMessages(self, peerSocket, senderIdentifier, sBytes, AESKey, senderPublicKey):
+    def ListenForMessages(self, peerSocket, senderIdentifier, sBytes, AESKey, senderPublicKey, event=None):
         try:
             conn = sqlite3.connect(self.databaseName)
             cursor = conn.cursor()
@@ -223,20 +247,55 @@ class Peer():
                     self.logger.warning(f"{senderIdentifier} socket is closed in ListenForMessages")
                     return
                 with self.connectionLocks[senderIdentifier]:
+                    self.logger.debug("Holding lock in ListenForMessages")
                     if(senderIdentifier not in self.openConnections):
+                        self.logger.debug("Returning from ListenForMessages due to not in openConnections")
                         return
-                    messageRaw = peerSocket.recv(self.messagePadLength)
+                
+                self.logger.debug("No longer holding lock in ListenForMessages")
+                
+                messageRaw = b""
+                if peerSocket.fileno() != -1:
+                    try:
+                        messageRaw = peerSocket.recv(self.messagePadLength)
+                    except Exception as e:
+                        self.logger.error(f"Socket error in ListenForMessages: {e}", exc_info=True)
+                else:
+                    self.logger.error(f"PeerSocket.fileno = -1 in ListenForMessages")
                 
                 if(messageRaw == b""):
+                    self.logger.debug("Returning from ListenForMessages due to b''")
                     return
                 else:
                     #self.logger.debug(f"messageRaw in ListenForMessages : {messageRaw}")
                     message = json.loads(messageRaw.rstrip(b"\0").decode())
-                    if(message["type"] == "socketClose"):
+                    self.logger.debug(f"Message in ListenForMessages : {message}")
+                    if(message["type"] == "closeSocket"):
                         self.logger.warning(f"Shutting connection with {senderIdentifier}")
+                        peerSocket.send(json.dumps({"type" : "closeSocketResponse"}).encode().ljust(self.messagePadLength, b"\0"))
+                        sleep(1)
                         peerSocket.shutdown(socket.SHUT_RDWR)
                         peerSocket.close()
+                        
                         return
+                    
+                    elif(message["type"] == "closeSocketResponse"):
+                        self.logger.warning(f"Shutting connection with {senderIdentifier} - Received confirmation")
+                        peerSocket.shutdown(socket.SHUT_RDWR)
+                        peerSocket.close()
+                    
+                    elif(message["type"] == "isOnline"):
+                        self.logger.info(f"Received isOnline check from {message['identifier']}")
+                        with self.onlineUsersDictLock:
+                            self.onlineUsersDict[message["identifier"]] = True
+                        self.logger.debug(f"New Online Users Dict : {self.onlineUsersDict}")
+                        peerSocket.send(json.dumps({"type" : "isOnlineResponse" , "valid" : "true" , "identifier" : identifier}).encode().ljust(self.messagePadLength, b"\0"))
+                    elif(message["type"] == "isOnlineResponse"):
+                        self.logger.debug(f"Recieved isOnlineResponse from {message['identifier']}")
+                        with self.onlineUsersDictLock:
+                            self.onlineUsersDict[message["identifier"]] = True
+                        #self.logger.debug(f"New Online Users Dict : {self.onlineUsersDict}")
+                        event.set()
                     elif(message["type"] == "message"):
                         self.logger.debug(f"message in ListenForMessages : {message}")
                         nonce = base64.b64decode(message["nonce"])
@@ -281,7 +340,8 @@ class Peer():
                             "senderIdentifier" : senderIdentifier,
                             "message" : plaintext
                         })
-                    
+             
+            self.logger.debug(f"WHILE LOOP FINISHED : {(senderIdentifier in self.openConnections)}, {(peerSocket.fileno() != -1)}")       
         except Exception as e:
             self.logger.error(f"Error {e} in ListenForMessages", exc_info=True)
         finally:
@@ -403,16 +463,18 @@ class Peer():
     def MessageSender(self, AESKey, sBytes, outputSocket, recipientIdentifier):
         messageQueue = self.messagingQueues[recipientIdentifier]
         while True:
-            messageData = messageQueue.get().encode()
+            message = messageQueue.get()
+            messageData = message[0].encode()
+            messageType = message[1]
             self.logger.warning(f"Now Sending {messageData} to {recipientIdentifier}")
-            self.SendMessage(AESKey, sBytes, outputSocket, recipientIdentifier, messageData)
+            self.SendMessage(AESKey, sBytes, outputSocket, recipientIdentifier, messageData, messageType)
     
-    def SendMessage(self, AESKey, sBytes, outputSocket, recipientIdentifier, messageData):
+    def SendMessage(self, AESKey, sBytes, outputSocket, recipientIdentifier, messageData, messageType="message"):
         try:
             conn = sqlite3.connect(self.databaseName)
             cursor = conn.cursor()
             
-            messagePayloadRaw = self.CalculateMessage(AESKey, messageData, sBytes, self.privateKey)
+            messagePayloadRaw = self.CalculateMessage(AESKey, messageData, sBytes, self.privateKey, messageType=messageType)
             messagePayload = json.dumps(messagePayloadRaw).encode()
             self.logger.debug(f"Message Payload Length : {len(messagePayload)}")
             self.logger.info("Sending padded payload of length " + str(len(messagePayload.ljust(self.messagePadLength, b'\0'))))
@@ -433,8 +495,7 @@ class Peer():
         finally:
             conn.close()
     
-    def StartSession(self, otherIdentifier=None, host=None, port=None):
-        #TODO
+    def StartSession(self, otherIdentifier=None, host=None, port=None, isOnlineCheck=False, event=None):
         try:
             conn = sqlite3.connect(self.databaseName)
             cursor = conn.cursor()
@@ -445,8 +506,16 @@ class Peer():
             
             self.logger.debug(f"Host : {host}, Port : {port}")
             
-            outputSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            outputSocket.connect((host, port))            
+            try:
+                outputSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                outputSocket.connect((host, port))            
+            except OSError as e:
+                if(isOnlineCheck):
+                    self.logger.info(f"User {otherIdentifier} is not online : code {e.winerror} in StartSession")
+                    event.set()
+                    return None
+                else:
+                    self.logger.error(f"Error connecting to {identifier} at {host}:{port} : code {e.winerror} StartSession")
             
             #Choosing the DHE p,g and a
             p = self.GeneratePrime(self.DHEBitLength)
@@ -569,8 +638,10 @@ class Peer():
             if(recipientIdentifier not in self.messagingQueues):
                 self.messagingQueues[recipientIdentifier] = queue.Queue()
             
-            threading.Thread(target = peer.ListenForMessages, args=(outputSocket, recipientIdentifier, sBytes, AESKey, recipientPublicKey), daemon=False).start()
+            threading.Thread(target = peer.ListenForMessages, args=(outputSocket, recipientIdentifier, sBytes, AESKey, recipientPublicKey), kwargs= {"event" : event},daemon=False).start()
             threading.Thread(target=self.MessageSender, args=(AESKey, sBytes, outputSocket, recipientIdentifier)).start()
+            
+            return outputSocket
         except Exception as e:
             self.logger.error(f"Error {e} in StartSession", exc_info=True)
         finally:
@@ -580,13 +651,9 @@ class Peer():
         with self.connectionLocks[otherUserIdentifier]:
             connectionSocket = self.openConnections[otherUserIdentifier]
             connectionSocket.send(json.dumps({"type" : "closeSocket"}).encode().ljust(self.messagePadLength, b"\0"))
-            connectionSocket.shutdown(socket.SHUT_RDWR)
-            connectionSocket.close()
-            self.openConnections.pop(otherUserIdentifier)
-            self.logger.debug(f"Removed {otherUserIdentifier} from openConnections : now {self.openConnections}")
             
         
-    def CalculateMessage(self, AESKey, plaintext, sBytes, edPrivateKey):
+    def CalculateMessage(self, AESKey, plaintext, sBytes, edPrivateKey, messageType="message"):
         try:
             nonce = os.urandom(12)
             aesGCM = AESGCM(AESKey)
@@ -603,7 +670,7 @@ class Peer():
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
             return {
-                "type" : "message",
+                "type" : messageType,
                 "nonce": base64.b64encode(nonce).decode(), #Doing this because json.dumps doesnt like b""
                 "hmacTag": base64.b64encode(hmacTag).decode(),
                 "signature" : base64.b64encode(signature).decode(),
@@ -661,7 +728,9 @@ class Peer():
             conn.close()
             
             self.logger.debug(f"USERS : f{rows}")
-            return rows
+           
+            onlineUsers = [identifier for identifier in self.onlineUsersDict if self.onlineUsersDict[identifier]]
+            return (rows, onlineUsers)
         except Exception as e:
             self.logger.error(f"Error {e} in ReturnSavedUsers", exc_info=True)
 
@@ -786,8 +855,9 @@ def GetDetails():
 @app.route('/api/GetSavedUsers', methods=['GET'])
 def GetSavedUsers():
     try:
-        return jsonify(peer.ReturnSavedUsers())
-    
+        users = peer.ReturnSavedUsers()
+        return jsonify({"users" : users[0], "onlineUsers" : users[1]})
+        
     except Exception as e:
         peer.logger.error(f"Error {e} in GetSavedUsers", exc_info=True)
         return jsonify({"Unexpected error - check logs"}), 500
@@ -833,7 +903,6 @@ def SetSetting():
 @app.route('/api/GetDetailsOfOtherUser/<otherUserID>', methods=['GET'])
 def GetDetailsOfOtherUser(otherUserID):
     details = peer.GetDetailsOfUser(otherUserID)
-    detailsKey = ed25519.Ed25519PublicKey.from_public_bytes(details[1])
     return jsonify({
         "identifier" : details[0],
         "publicKey" :  peer.VisualisePublicKey(details[0]),
@@ -847,7 +916,7 @@ def SendMessageToUser(otherUserID):
     message = content["message"]
     peer.logger.debug(f"MESSAGE TO SEND TO {otherUserID}: {message}")    
     
-    peer.messagingQueues[otherUserID].put(message)
+    peer.messagingQueues[otherUserID].put([message, "message"])
     peer.logger.debug("Added message to message Queue")
 
     return jsonify({"status" : "success"})
@@ -856,7 +925,7 @@ def SendMessageToUser(otherUserID):
 def ChangeSession():
     content = request.json  # Get JSON from the request body
     identifier = content["identifier"]
-    peer.logger.debug(f"Recieved Change Session Request For {identifier}")
+    peer.logger.debug(f"Recieved Change Session Request For {identifier} : {content['type'].lower()}")
     if(identifier in peer.openConnections and content["type"].lower() == "end"):
         peer.logger.debug(f"Ending session with {identifier}")
         peer.EndSession(identifier)
@@ -885,7 +954,3 @@ if __name__ == "__main__":
     peer.logger.debug("STARTING UP")
     peer.Start()
     threading.Thread(target = peer.WaitForIncomingRequests, daemon=False).start()
-    
-    #shouldAddUser = input("SHOULD ADD USER?")
-    #if(shouldAddUser == "Y"):
-        #peer.AddNewUser(host=input("HOST : "), port=int(input("PORT : ")))
