@@ -191,7 +191,7 @@ body {
 
 #messagingInputFieldWrapper {
   position: relative;
-  width: 85%; 
+  width: 75%; 
   height: 50px; 
   margin: auto 10px auto 5px; 
   flex-shrink: 0;
@@ -511,4 +511,48 @@ input:checked + .slider:before {
 
 #AddUserButton:hover{
   font-weight: bold;
+}
+
+#uploadFileButton{
+  width : 10%;
+  height : 50px;
+  display: flex;
+  margin : auto 5px;
+  font-size: 30px;
+  padding: 0px;
+  text-align: center;
+  justify-content: center;
+  align-items: center;
+}
+
+#fileInput {
+ display: none;
+}
+
+#imageViewer {
+  display: none; /*Goes flex when activated*/
+  flex-direction: column;
+  height: 80%;
+  margin: 5px;
+  justify-content: center; /* Horizontal */
+  align-items: center;     /* Vertical */
+  position: relative;
+}
+
+#imageViewer img {
+  max-height: 100%;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+#imageViewerReturnToMessages {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  font-size: 12px;
+  color: var(--mainColour);
+  background-color: var(--backgroundColour);
+  width : 90px;
+  padding : 5px;
+  cursor : pointer;
 }

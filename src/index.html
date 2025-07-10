@@ -46,9 +46,13 @@
         </div>
         <button class="displayText button underlineFade" id="StartSessionButton" aria-label="Start Session"></button>
       </div>
-      <div id="chat">
+      <div id="chat" class="chat">
+      </div>
+      <div id="imageViewer">
       </div>
       <div id="messagingInput">
+        <input type="file" id="fileInput" aria-label="fileInput"/>
+        <button class="displayText button" id="uploadFileButton">+</button>
         <div id="messagingInputFieldWrapper">
           <textarea class="displayText input" type="text" placeholder="Write your message here" id="messagingInputField"></textarea>
           <div id="charCount">0/1900</div>

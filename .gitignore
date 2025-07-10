@@ -99,3 +99,10 @@ out/
 !Themes.json
 !package.json
 !package-lock.json
+*.png
+*.jpg
+*.jpeg
+*.gif
+uploadsA/
+uploadsB/
+*.bin

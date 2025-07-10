@@ -22,6 +22,7 @@ const onlineDisplayDict = {
   true : "🟢",
   false : "🔴"
 };
+const imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'ico', 'svg', 'heic'];
 
 //!TEMP - FOR TESTING MULTIPLE USERS
 const backendPort = window.myAPI.backendPort;
@@ -124,40 +125,97 @@ function DisplaySetUsers(id, chatID, banner="", amount = 0, sort = "asc" ,revers
   return savedUsersLi;
 }
 
-function DisplayMessages(messagesToDisplay, messagerIdentifier, chatID, banner="") {
-    let chat = document.getElementById(chatID);
-    chat.innerHTML = "";
-    messagesToDisplay.forEach(messageToDisplay => {
-        const div = document.createElement("div");
-        div.className = "displayText message";
-
-        if(messageToDisplay[1] === identifier) div.classList.add("messageOutgoing");
-        else div.classList.add("messsageIncoming");
-        
-        let messageTimestampArray = (messageToDisplay[0].split(" ")[1]).split(":");
-        console.debug(`Message timestamp array: ${messageTimestampArray}`);
-
-        let ending = "";
-        if(use12hFormat){
-          if(Number(messageTimestampArray[0]) >= 12){ 
-            ending = "PM";
-            if(Number(messageTimestampArray[0]) > 13) messageTimestampArray[0] = String(Number(messageTimestampArray[0] - 12));
-          }
-          else ending = "AM";
-        }
-        
-        let messageTimestamp = messageTimestampArray[0].padStart(2, '0') + ":" + messageTimestampArray[1].padStart(2, '0') + ending;
-        
-        div.innerHTML = messageToDisplay[2].replaceAll("\n", "<br>");
-        div.innerHTML = div.innerHTML + `<div class="timestamp">${messageTimestamp}</div>`;
-        chat.appendChild(div);
+async function SendFile(dataToSend, otherIdentifier) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/Post/SendFile`, {
+        method: 'POST',
+        body: dataToSend
     });
 
-    if(banner !== "") {
-      let messageLabel = document.getElementById(banner);
-      console.log(`Messanger Identifier in DisplayMessages : ${messagerIdentifier} ${onlineUsers}`);
-      messageLabel.textContent = `${savedUsersMap.get(messagerIdentifier)} ${onlineDisplayDict[onlineUsers.includes(messagerIdentifier)]}`;
-    }
+    const data = await response.json();
+    console.log("POST Response in SendFile:", data);
+    
+  } catch (error) {
+    console.error("Error posting data:", error);
+  }
+}
+
+function DisplayMessages(messagesToDisplay, messagerIdentifier, chatID, banner="") {
+  let chat = document.getElementById(chatID);
+  chat.innerHTML = "";
+  messagesToDisplay.forEach(messageToDisplay => {
+      const div = document.createElement("div");
+      div.className = "displayText message";
+
+      if(messageToDisplay[2] === identifier) div.classList.add("messageOutgoing");
+      else div.classList.add("messsageIncoming");
+      
+      console.debug(`MessageToDisplay : ${messageToDisplay}`);
+      let messageTimestampArray = (messageToDisplay[1].split(" ")[1]).split("-");
+      console.debug(`Message timestamp array: ${messageTimestampArray}`);
+
+      let ending = "";
+      if(use12hFormat){
+        if(Number(messageTimestampArray[0]) >= 12){ 
+          ending = "PM";
+          if(Number(messageTimestampArray[0]) > 13) messageTimestampArray[0] = String(Number(messageTimestampArray[0] - 12));
+        }
+        else ending = "AM";
+      }
+      let messageTimestamp = messageTimestampArray[0].padStart(2, '0') + ":" + messageTimestampArray[1].padStart(2, '0') + ending;
+      if(messageToDisplay[0] === "message"){
+        div.innerHTML = messageToDisplay[3].replaceAll("\n", "<br>");
+      }
+      else if(messageToDisplay[0] === "file" && (imageExtensions.includes(messageToDisplay[3]))){
+        div.innerHTML = `<img src="/api/GetFileData/${messageToDisplay[3]}/${messageToDisplay[4]}?shouldCrop=True" alt="Photo">`
+        div.addEventListener("click", () => {
+          if(page === "chat"){
+            console.log("Image Clicked!");
+            document.querySelector(".chat").style.display = "none";
+            const imageViewer =  document.getElementById("imageViewer");
+            imageViewer.style.display = "flex";
+            imageViewer.innerHTML = `<button class="displayText button underlineFade" id="imageViewerReturnToMessages">Return To Chat</button>`
+            imageViewer.innerHTML += `<img src="/api/GetFileData/${messageToDisplay[3]}/${messageToDisplay[4]}?shouldResize=True&maxHeight=512&maxWidth=1024" alt="Photo">`
+            document.getElementById("imageViewerReturnToMessages").addEventListener("click", () => {
+              document.getElementById("imageViewer").style.display = "none";
+              document.querySelector(".chat").style.display = "flex";
+            });
+          }
+        });
+      }
+      div.innerHTML = div.innerHTML + `<div class="timestamp">${messageTimestamp}</div>`;
+      chat.appendChild(div);
+  });
+
+  if(banner !== "") {
+    let messageLabel = document.getElementById(banner);
+    console.log(`Messanger Identifier in DisplayMessages : ${messagerIdentifier} ${onlineUsers}`);
+    messageLabel.textContent = `${savedUsersMap.get(messagerIdentifier)} ${onlineDisplayDict[onlineUsers.includes(messagerIdentifier)]}`;
+  }
+
+  if( page==="chat"){
+    document.getElementById("uploadFileButton").addEventListener("click", () => {
+      document.getElementById("fileInput").click();
+    });
+
+    document.getElementById("fileInput").addEventListener("change", (event) => {
+      const file = event.target.files[0];
+      console.log("Recieved new file");
+      if (!file) return;
+
+      const formData = new FormData();
+
+      const extension = file.name.split(".").pop();
+      const filename = file.name.replace(`.${extension}`, "");
+      console.debug(`extension ${extension} filename ${filename}`);
+      formData.append("file", file);
+      formData.append("extension", extension);
+      formData.append("filename", filename);
+      formData.append("otherIdentifier", messagerIdentifier);
+
+      SendFile(formData)
+    });
+  } 
 }
 
 async function GetThemes() {

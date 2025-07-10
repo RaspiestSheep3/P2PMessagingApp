@@ -13,10 +13,13 @@ import sqlite3
 import re
 import keyring
 import queue
+import io
+import mimetypes
+from PIL import Image
 from time import sleep
 from datetime import datetime
 from dataclasses import dataclass
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, send_file
 from flask_socketio import SocketIO
 from flask_cors import CORS
 from cryptography.fernet import Fernet
@@ -44,6 +47,17 @@ class PeerDetail:
     host: str
     port: int
 
+@dataclass
+class FileUpload:
+    ownerIdentifier : str
+    targetIdentifier : str
+    fileExtension : str
+    fileSizeBytes : int
+    timestamp : str
+    isUploader : bool
+    totalChunks : int
+    userFilename : str
+
 class Peer():
     def __init__ (self, incomingConnectionHost="0.0.0.0", incomingConnectionPort = incomingConnectionPortGlobal, socketioInstance = None):
         self.connections = []
@@ -69,7 +83,12 @@ class Peer():
         self.socketio = socketioInstance
         self.onlineUsersDict = {} #Used to check which users are online
         self.onlineUsersEventDict = {}
+        self.activeAESKeys = {}
+        self.activeSBytes = {}
         self.onlineUsersDictLock = threading.Lock()
+        self.filesBeingUploaded = []
+        self.fileChunkHeaderSizeBytes = 1024
+        self.fileChunkSizeBytes = 64 * 1024 #64 KiB
         
         #Logging setup
         self.logFormatter = colorlog.ColoredFormatter(
@@ -174,9 +193,8 @@ class Peer():
             else:
                 self.fernetKey = keyringKey.encode()
             
-            #!TEMP
-            self.logger.warning(f"FERNET KEY (DELETE THIS) : {self.fernetKey}")
-            self.logger.warning(f"KNOWN USERS (DELETE THIS) : {self.knownUsers}")
+            #self.logger.warning(f"FERNET KEY (DELETE THIS) : {self.fernetKey}")
+            #self.logger.warning(f"KNOWN USERS (DELETE THIS) : {self.knownUsers}")
             
             #Finding out who is online
             with self.onlineUsersDictLock:
@@ -193,6 +211,7 @@ class Peer():
                     self.logger.info(f"User {user} is online - sending message")
                     outputSocket.send(json.dumps({"type" : "isOnline", "identifier" : identifier}).encode().ljust(self.messagePadLength, b"\0"))
                     self.onlineUsersEventDict[user.identifier].wait()
+                    self.logger.info(f"Now received response from {user.identifier}")
                     self.EndSession(user.identifier)
 
             with self.onlineUsersDictLock:
@@ -276,26 +295,102 @@ class Peer():
                         sleep(1)
                         peerSocket.shutdown(socket.SHUT_RDWR)
                         peerSocket.close()
+                        del self.openConnections[senderIdentifier]
+                        del self.activeAESKeys[senderIdentifier]
+                        del self.activeSBytes[senderIdentifier]
                         
+                        self.logger.warning(f"New OpenConnections in ListenForMessages : {self.openConnections}")
                         return
                     
                     elif(message["type"] == "closeSocketResponse"):
                         self.logger.warning(f"Shutting connection with {senderIdentifier} - Received confirmation")
                         peerSocket.shutdown(socket.SHUT_RDWR)
                         peerSocket.close()
-                    
+                        del self.openConnections[senderIdentifier]
+                        del self.activeAESKeys[senderIdentifier]
+                        del self.activeSBytes[senderIdentifier]
+                        
+                        self.logger.warning(f"New OpenConnections in ListenForMessages : {self.openConnections}")
+                        return                        
                     elif(message["type"] == "isOnline"):
                         self.logger.info(f"Received isOnline check from {message['identifier']}")
                         with self.onlineUsersDictLock:
                             self.onlineUsersDict[message["identifier"]] = True
                         self.logger.debug(f"New Online Users Dict : {self.onlineUsersDict}")
                         peerSocket.send(json.dumps({"type" : "isOnlineResponse" , "valid" : "true" , "identifier" : identifier}).encode().ljust(self.messagePadLength, b"\0"))
+                    
                     elif(message["type"] == "isOnlineResponse"):
                         self.logger.debug(f"Recieved isOnlineResponse from {message['identifier']}")
                         with self.onlineUsersDictLock:
                             self.onlineUsersDict[message["identifier"]] = True
                         #self.logger.debug(f"New Online Users Dict : {self.onlineUsersDict}")
                         event.set()
+                    
+                    elif(message["type"] == "fileUploadNew"):
+                        self.logger.debug(f"File Upload Request from {message['identifier']}")
+                        binaryLength = message["length"]
+                        totalChunks = math.ceil(message["length"] / self.fileChunkSizeBytes)
+                        messageTimestamp = message["timestamp"]
+                        extension = message["fileExtension"]
+                        userFilename = message["userFilename"]
+                        aesGCM = AESGCM(AESKey)
+                        
+                        fileUploadClass = FileUpload(message["identifier"], identifier, extension, binaryLength ,messageTimestamp ,False, totalChunks,userFilename)
+                        self.filesBeingUploaded.append(fileUploadClass)
+                        self.logger.debug(f"Current file upload list in ListenForMessages: {self.filesBeingUploaded}")
+                    
+                        dataList = [None] * totalChunks
+
+                        receivingData = True
+                        while receivingData:
+                            chunkMessage = json.loads(peerSocket.recv(self.fileChunkHeaderSizeBytes).rstrip(b"\0").decode())
+                            if(chunkMessage["type"] == "fileUploadEnd"):
+                                receivingData = False
+                            elif(chunkMessage["type"] == "fileUploadChunk"):
+                                binaryCiphertext = peerSocket.recv(chunkMessage["chunkLength"])
+                                nonce = base64.b64decode(chunkMessage["nonce"])
+                                
+                                hmacTag = base64.b64decode(chunkMessage["hmacTag"])
+                                signature = base64.b64decode(chunkMessage["signature"])
+                                #HMAC test   
+                                
+                                expectedHmacTag = hmac.new(self.activeSBytes[senderIdentifier], binaryCiphertext, hashlib.sha256).digest()
+                                if hmac.compare_digest(hmacTag, expectedHmacTag):
+                                    self.logger.info("HMAC TAG CORRECT")
+                                else:
+                                    self.logger.error("HMAC TAG INCORRECT - DATA TAMPERED OR FORGED for file")
+                                    return
+                                
+                                binaryPlaintext = aesGCM.decrypt(nonce, binaryCiphertext, None)
+                                
+                                #Signature test
+                                try:
+                                    self.logger.warning(f"SIGNATURE (DELETE THIS) : {senderPublicKey} {type(senderPublicKey)}")
+                                    senderPublicKey.verify(signature, binaryPlaintext)
+                                except InvalidSignature:
+                                    self.logger.critical(f"INVALID SIGNATURE - DO NOT TRUST")
+                                    return
+                                
+                                dataList[chunkMessage["chunkIndex"]] = binaryPlaintext 
+                                self.logger.debug(f"Recieved chunk {chunkMessage['chunkIndex']} (len : {len(dataList[chunkMessage['chunkIndex']])})")
+                        
+                        self.logger.debug(f"Recieved all chunks : {len(dataList)}, expected {totalChunks}")
+                        self.filesBeingUploaded.remove(fileUploadClass)
+                        
+                        binaryData = b"".join(dataList)
+                        
+                        self.logger.debug(f"Binary data length in ListenForMessages : {len(binaryData)}")
+                        
+                        #Encrypting with Fernet
+                        cipher = Fernet(self.fernetKey)
+                        ciphertextFernet= cipher.encrypt(binaryData)    
+                        
+                        os.makedirs(f"uploads{identifier}", exist_ok=True)
+                        with open(f"uploads{identifier}/{senderIdentifier}--{identifier}--{messageTimestamp}.bin", "wb") as fileHandle:
+                            fileHandle.write(ciphertextFernet)
+                            
+                        cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, type, extension, filePath, userFilename) VALUES (?, ?, ?, ?, ?, ?)", (messageTimestamp, senderIdentifier, "file", extension, f"uploads{identifier}/{senderIdentifier}--{identifier}--{messageTimestamp}.bin", userFilename))
+                        conn.commit()
                     elif(message["type"] == "message"):
                         self.logger.debug(f"message in ListenForMessages : {message}")
                         nonce = base64.b64decode(message["nonce"])
@@ -304,22 +399,30 @@ class Peer():
                         ciphertext = base64.b64decode(message["ciphertext"])
                         timestamp = message["timestamp"]
                         
+                        self.logger.debug(f"Nonce on receipient : {nonce.hex()}")
+                        self.logger.debug(f"Ciphertext in ListenerForMessages : {ciphertext.hex()}")
                         #HMAC test   
-                        expectedHmacTag = hmac.new(sBytes, ciphertext, hashlib.sha256).digest()
+                        self.logger.debug(f"sBytes on ListenForMessages : {sBytes.hex()}") 
+                        self.logger.debug(f"HMAC on receiver : {hmacTag.hex()}")
+                        self.logger.debug(f"HMAC sBytes CHECK {self.activeSBytes[senderIdentifier] == sBytes} {sBytes.hex()} {hmacTag}")
+                        self.logger.debug(f"AES KEY on receipient : {AESKey.hex()}")
+                        expectedHmacTag = hmac.new(self.activeSBytes[senderIdentifier],nonce + ciphertext, hashlib.sha256).digest()
+                        self.logger.debug(f"Expected HMAC on receiver : {expectedHmacTag.hex()}")
                         if hmac.compare_digest(hmacTag, expectedHmacTag):
                             self.logger.info("HMAC TAG CORRECT")
                         else:
-                            self.logger.error("HMAC TAG INCORRECT - DATA TAMPERED OR FORGED")
+                            self.logger.error("HMAC TAG INCORRECT - DATA TAMPERED OR FORGED for message")
                             return
                             
                         #Decrypting ciphertext
                         aesGCM = AESGCM(AESKey)
-                        plaintext = aesGCM.decrypt(nonce, ciphertext, None).decode()
+                        plaintextEncoded = aesGCM.decrypt(nonce, ciphertext, None)
+                        plaintext = plaintextEncoded.decode()
                         
                         #Signature test
                         try:
                             self.logger.warning(f"SIGNATURE (DELETE THIS) : {senderPublicKey} {type(senderPublicKey)}")
-                            senderPublicKey.verify(signature, plaintext.encode())
+                            senderPublicKey.verify(signature, plaintextEncoded)
                         except InvalidSignature:
                             self.logger.critical(f"INVALID SIGNATURE - DO NOT TRUST")
                             return
@@ -331,7 +434,7 @@ class Peer():
                         messageFernet = cipher.encrypt(plaintext.encode())
                         
                         #Adding message to the SQL
-                        cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, message) VALUES (?, ?, ?)", (timestamp, senderIdentifier, messageFernet))
+                        cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, message, type) VALUES (?, ?, ?, ?)", (timestamp, senderIdentifier, messageFernet, "message"))
                         conn.commit()
                         
                         #Alerting frontend about the new message
@@ -348,7 +451,6 @@ class Peer():
             conn.close()
     
     def HandleIncomingConnection(self, peerSocket):
-        #TODO
         try:
             conn = sqlite3.connect(self.databaseName)
             cursor = conn.cursor()
@@ -414,7 +516,9 @@ class Peer():
                 
                 sBytes = s.to_bytes((s.bit_length() + 7) // 8, byteorder="big")
                 
-                self.logger.info("FOUND sBYTES in HandleIncomingConnection")
+                self.logger.info(f"FOUND sBYTES in HandleIncomingConnection : {len(sBytes)} {sBytes.hex()}")
+                self.activeSBytes[senderIdentifier] = sBytes
+                self.logger.debug(f"ActiveSBytes : {self.activeSBytes[senderIdentifier].hex()}")
                 
                 #Generating AES Key
                 AESKey = HKDF(
@@ -423,7 +527,8 @@ class Peer():
                     salt=None,
                     info=b'handshake data',
                     backend=default_backend()
-                ).derive(sBytes)
+                ).derive(self.activeSBytes[senderIdentifier])
+                self.activeAESKeys[senderIdentifier] = AESKey
                 
                 #Avoiding SQL Injection - Only allow nums, letters and _s
                 if(re.sub(r"\W+", "", senderIdentifier) != senderIdentifier):
@@ -435,7 +540,11 @@ class Peer():
                 CREATE TABLE IF NOT EXISTS chat{senderIdentifier} (
                     timestamp TEXT NOT NULL,
                     senderIdentifier TEXT NOT NULL,
-                    message TEXT NOT NULL
+                    message BLOB,
+                    type TEXT NOT NULL,
+                    extension TEXT,
+                    filePath TEXT UNIQUE,
+                    userFilename TEXT
                 )
                 ''')
                 conn.commit()
@@ -454,22 +563,23 @@ class Peer():
                     self.messagingQueues[senderIdentifier] = queue.Queue()
                 
                 threading.Thread(target = self.ListenForMessages, args=(peerSocket, senderIdentifier, sBytes, AESKey, senderPublicKey), daemon=True).start()
-                threading.Thread(target=self.MessageSender, args=(AESKey, sBytes, peerSocket, senderIdentifier)).start()
+                threading.Thread(target=self.MessageSender, args=(senderIdentifier,)).start()
         except Exception as e:
             self.logger.error(f"Error {e} in HandleIncomingConnection", exc_info=True)
         finally:
             conn.close()
     
-    def MessageSender(self, AESKey, sBytes, outputSocket, recipientIdentifier):
+    def MessageSender(self, recipientIdentifier):
         messageQueue = self.messagingQueues[recipientIdentifier]
         while True:
             message = messageQueue.get()
             messageData = message[0].encode()
             messageType = message[1]
             self.logger.warning(f"Now Sending {messageData} to {recipientIdentifier}")
-            self.SendMessage(AESKey, sBytes, outputSocket, recipientIdentifier, messageData, messageType)
+            self.logger.warning(f"sBytes check in MessageSender {self.activeSBytes[recipientIdentifier].hex()}")
+            self.SendMessage(self.activeAESKeys[recipientIdentifier], self.activeSBytes[recipientIdentifier], recipientIdentifier, messageData, messageType)
     
-    def SendMessage(self, AESKey, sBytes, outputSocket, recipientIdentifier, messageData, messageType="message"):
+    def SendMessage(self, AESKey, sBytes, recipientIdentifier, messageData, messageType="message"):
         try:
             conn = sqlite3.connect(self.databaseName)
             cursor = conn.cursor()
@@ -479,7 +589,15 @@ class Peer():
             self.logger.debug(f"Message Payload Length : {len(messagePayload)}")
             self.logger.info("Sending padded payload of length " + str(len(messagePayload.ljust(self.messagePadLength, b'\0'))))
             with self.connectionLocks[recipientIdentifier]:
+                outputSocket = self.openConnections[recipientIdentifier]
+                self.logger.debug(f"AES KEY on sender : {AESKey.hex()}")
                 self.logger.debug(f"Recipient Identifier in SendMessage is {recipientIdentifier}")
+                self.logger.debug(f"Socket: {(outputSocket)}, {self.openConnections}, {outputSocket in self.openConnections.values()}")
+                
+                if outputSocket.fileno() == -1:
+                    self.logger.error(f"Socket for {recipientIdentifier} is closed in SendMessage (fileno == -1)")
+                    return
+                
                 outputSocket.send(messagePayload.ljust(self.messagePadLength, b"\0"))
 
             #Encrypting message with SQL
@@ -488,7 +606,7 @@ class Peer():
             messageFernet = cipher.encrypt(messageData)
 
             #Adding message to the SQL
-            cursor.execute(f"INSERT INTO chat{recipientIdentifier} (timestamp, senderIdentifier, message) VALUES (?, ?, ?)", (messagePayloadRaw["timestamp"], identifier, messageFernet))
+            cursor.execute(f"INSERT INTO chat{recipientIdentifier} (timestamp, senderIdentifier, message, type) VALUES (?, ?, ?, ?)", (messagePayloadRaw["timestamp"], identifier, messageFernet, "message"))
             conn.commit()
         except Exception as e:
             self.logger.error(f"Error {e} in SendMessage", exc_info=True)
@@ -544,7 +662,7 @@ class Peer():
                 self.logger.debug("FAILED REQUEST")
                 return
             
-            recipientIdentifier = response["identifier"] 
+            otherIdentifier = response["identifier"] 
             
             if(response["keyRequest"] == True):
                 #Sending public key
@@ -558,7 +676,7 @@ class Peer():
                 
                 outputSocket.send(json.dumps({"publicKey" : base64.b64encode(publicKeyBytes).decode(), "host" : outputSocket.getsockname()[0], "port" : self.incomingConnectionPort}).encode().ljust(128, b"\0"))
             
-            if(recipientIdentifier not in self.knownUsers):
+            if(otherIdentifier not in self.knownUsers):
                 shouldRequestKey = True
             else:
                 shouldRequestKey = False
@@ -574,15 +692,15 @@ class Peer():
                 recipientPort = recipientPublicKeyDetails["port"]
             
                 #Updating SQL
-                cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName, host, port) VALUES (?, ?, ?, ?, ?)", (recipientIdentifier, recipientPublicKey, recipientPublicKeyDetails["displayName"], recipientHost, recipientPort))
+                cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName, host, port) VALUES (?, ?, ?, ?, ?)", (otherIdentifier, recipientPublicKey, recipientPublicKeyDetails["displayName"], recipientHost, recipientPort))
                 
                 conn.commit()
                 
-                self.knownUsers[recipientIdentifier] = PeerDetail(recipientIdentifier, recipientPublicKey, recipientPublicKeyDetails["displayName"], recipientHost, recipientPort)
+                self.knownUsers[otherIdentifier] = PeerDetail(otherIdentifier, recipientPublicKey, recipientPublicKeyDetails["displayName"], recipientHost, recipientPort)
             else:
                 outputSocket.send(json.dumps({"type" : "recipientPublicKeyNotNeeded"}).encode().ljust(64, b"\0"))
-                self.logger.debug(f"ALREADY HAVE KEY FOR {recipientIdentifier}")
-                cursor.execute("SELECT * FROM savedUsers WHERE identifier = ?", (recipientIdentifier,))
+                self.logger.debug(f"ALREADY HAVE KEY FOR {otherIdentifier}")
+                cursor.execute("SELECT * FROM savedUsers WHERE identifier = ?", (otherIdentifier,))
                 recipientPublicKey = cursor.fetchone()[1]
             
             recipientPublicKey = ed25519.Ed25519PublicKey.from_public_bytes(recipientPublicKey)
@@ -598,8 +716,10 @@ class Peer():
             
             sBytes = s.to_bytes((s.bit_length() + 7) // 8, byteorder="big")
             
-            self.logger.info("FOUND sBYTES in HandleIncomingConnection")
-            
+            self.logger.info(f"FOUND sBYTES in StartSession : {len(sBytes)} {sBytes.hex()}")
+            self.logger.debug(f"Other Identifier : {otherIdentifier}, Recipient Identifier : {otherIdentifier}")
+            self.activeSBytes[otherIdentifier] = sBytes
+            self.logger.debug(f"ActiveSBytes : {self.activeSBytes[otherIdentifier].hex()}")
             #Generating AES Key
             AESKey = HKDF(
                 algorithm=hashes.SHA256(),
@@ -609,37 +729,43 @@ class Peer():
                 backend=default_backend()
             ).derive(sBytes)
             
+            self.activeAESKeys[otherIdentifier] = AESKey
+            
             #Avoiding SQL Injection - Only allow nums, letters and _s
-            if(re.sub(r"\W+", "", recipientIdentifier) != recipientIdentifier):
-                self.logger.error(f'RECIPIENT IDENTIFIER IS INVALID IN STARTSESSION - ATTEMPTED SQL INJECTION (ORG : {recipientIdentifier})')
+            if(re.sub(r"\W+", "", otherIdentifier) != otherIdentifier):
+                self.logger.error(f'RECIPIENT IDENTIFIER IS INVALID IN STARTSESSION - ATTEMPTED SQL INJECTION (ORG : {otherIdentifier})')
                 return
             
             #Creating the SQL table
             cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS chat{recipientIdentifier} (
+            CREATE TABLE IF NOT EXISTS chat{otherIdentifier} (
                 timestamp TEXT NOT NULL,
                 senderIdentifier TEXT NOT NULL,
-                message BLOB NOT NULL
+                message BLOB,
+                type TEXT NOT NULL,
+                extension TEXT,
+                filePath TEXT UNIQUE,
+                userFilename TEXT
             )
             ''')
             conn.commit()
             
             #Adding connection to known connections
             with self.openConnectionsLock:
-                self.openConnections[recipientIdentifier] = outputSocket
+                self.openConnections[otherIdentifier] = outputSocket
             
                 self.logger.warning(f"(DELETE THIS) OPEN CONNECTIONS : {self.openConnections}")
             
             #Making a lock for this message
-            if(recipientIdentifier not in self.connectionLocks):
-                self.connectionLocks[recipientIdentifier] = threading.Lock()
+            if(otherIdentifier not in self.connectionLocks):
+                self.connectionLocks[otherIdentifier] = threading.Lock()
             
             #Generating message queue
-            if(recipientIdentifier not in self.messagingQueues):
-                self.messagingQueues[recipientIdentifier] = queue.Queue()
+            if(otherIdentifier not in self.messagingQueues):
+                self.messagingQueues[otherIdentifier] = queue.Queue()
             
-            threading.Thread(target = peer.ListenForMessages, args=(outputSocket, recipientIdentifier, sBytes, AESKey, recipientPublicKey), kwargs= {"event" : event},daemon=False).start()
-            threading.Thread(target=self.MessageSender, args=(AESKey, sBytes, outputSocket, recipientIdentifier)).start()
+            threading.Thread(target = peer.ListenForMessages, args=(outputSocket, otherIdentifier, sBytes, AESKey, recipientPublicKey), kwargs= {"event" : event},daemon=False).start()
+            threading.Thread(target=self.MessageSender, args=(otherIdentifier,)).start()
             
             return outputSocket
         except Exception as e:
@@ -661,14 +787,18 @@ class Peer():
             
             #HMAC - makes sure the data has not been tampered with, comes from someone with the correct key
             
-            hmacTag = hmac.new(sBytes, ciphertext, hashlib.sha256).digest()
+            hmacTag = hmac.new(sBytes, nonce + ciphertext, hashlib.sha256).digest()
             
             #ED - signature
             signature = edPrivateKey.sign(plaintext)
             
             #Timestamp
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
+            timestamp = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
+           
+            self.logger.debug(f"sBytes on CalculateMessage : {sBytes.hex()}") 
+            self.logger.debug(f"HMAC on sender : {hmacTag.hex()}")
+            self.logger.debug(f"Nonce on sender : {nonce.hex()}")
+            self.logger.debug(f"Ciphertext in sender : {ciphertext.hex()}")
             return {
                 "type" : messageType,
                 "nonce": base64.b64encode(nonce).decode(), #Doing this because json.dumps doesnt like b""
@@ -702,18 +832,23 @@ class Peer():
             
             cipher = Fernet(self.fernetKey)
             
-            rows = [[row[0], row[1], cipher.decrypt(row[2]).decode()] for row in rows]
+            rowsOutput = []
+            for row in rows:
+                if(row[3] == "message"):
+                    rowsOutput.append([row[3], row[0], row[1], cipher.decrypt(row[2]).decode()])
+                elif(row[3] == "file"):
+                    rowsOutput.append([row[3], row[0], row[1], row[4], row[5], row[6]])
             
             if(reversed == "true" and sort=="asc") or (reversed=="false" and sort=="desc"):
-                rows = rows[::-1] #Making sure its in the right order
+                rowsOutput = rowsOutput[::-1] #Making sure its in the right order
 
-            self.logger.debug(f"ROWS REVERSED: {rows}")
+            self.logger.debug(f"ROWS REVERSED: {rowsOutput}")
 
         except Exception as e:
             self.logger.error(f"Error {e} in ReturnMessages", exc_info=True)
         finally:
             conn.close()
-            return rows
+            return rowsOutput
 
     def ReturnSavedUsers(self):
         try:
@@ -751,6 +886,7 @@ class Peer():
                 if(user.host == host) and (user.port == port):
                     self.EndSession(user.identifier)
                     self.logger.debug(f"SUCCESSFULLY ADDED {user.identifier}")
+                    self.onlineUsersDict[user.identifier] = True
         except Exception as e:
             self.logger.error(f"Error {e} in AddNewUser", exc_info=True)
 
@@ -945,6 +1081,109 @@ def AddNewUser():
     
     return jsonify({"status" : "success"})
 
+@app.route("/api/Post/SendFile", methods=['POST'])
+def SendFile():
+    try:
+        file = request.files.get("file")
+        extension = request.form.get("extension") 
+        filename = request.form.get("filename")
+        otherIdentifier = request.form.get("otherIdentifier")  
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
+        binaryData = file.read()
+        
+        #Encrypting the data
+        nonce = os.urandom(12)
+        aesGCM = AESGCM(peer.activeAESKeys[otherIdentifier])
+    
+        totalChunks = math.ceil(len(binaryData) / peer.fileChunkSizeBytes) 
+
+        #Using fernet to ensure security as a file cannot just be read
+        cipher = Fernet(peer.fernetKey)
+        ciphertextFernet= cipher.encrypt(binaryData)    
+        os.makedirs(f"uploads{identifier}", exist_ok=True)
+        with open(f"uploads{identifier}/{identifier}--{otherIdentifier}--{timestamp}.bin", "wb") as fileHandle:
+            fileHandle.write(ciphertextFernet)
+
+        peer.logger.debug(f"{peer.openConnections} {otherIdentifier} {peer.openConnections[otherIdentifier]}")
+        otherUserConnection = peer.openConnections[otherIdentifier]
+        otherUserConnection.send(json.dumps({"type" : "fileUploadNew", "identifier" : identifier, "fileExtension" : extension, "length" : len(binaryData), "timestamp" : timestamp, "userFilename" : filename}).encode().ljust(peer.messagePadLength, b"\0"))
+        peer.filesBeingUploaded.append(FileUpload(identifier, otherIdentifier, extension, len(binaryData),timestamp,True,totalChunks,filename))
+        peer.logger.debug(f"len(plaintext) : {len(binaryData)}")
+        peer.logger.debug(f"Current file upload list : {peer.filesBeingUploaded}")
+        
+        for i in range(totalChunks):
+            nonce = os.urandom(12)
+            chunk = binaryData[i * peer.fileChunkSizeBytes : (i + 1) * peer.fileChunkSizeBytes]
+            chunkEncrypted = aesGCM.encrypt(nonce, chunk, None)
+            
+            #HMAC - makes sure the data has not been tampered with, comes from someone with the correct key
+            hmacTag = hmac.new(peer.activeSBytes[otherIdentifier], chunkEncrypted, hashlib.sha256).digest()
+            #ED - signature
+            signature = peer.privateKey.sign(chunk)
+            
+            otherUserConnection.send(json.dumps({"type" : "fileUploadChunk" , "chunkIndex" : i, "chunkLength" : len(chunkEncrypted), "hmacTag" : base64.b64encode(hmacTag).decode('utf-8'), "signature" : base64.b64encode(signature).decode('utf-8'), "nonce" : base64.b64encode(nonce).decode('utf-8')}).encode().ljust(peer.fileChunkHeaderSizeBytes, b"\0"))
+            otherUserConnection.send(chunkEncrypted)
+        otherUserConnection.send(json.dumps({"type" : "fileUploadEnd"}).encode().ljust(peer.fileChunkHeaderSizeBytes, b"\0"))
+        
+        conn = sqlite3.connect(peer.databaseName)
+        cursor = conn.cursor()
+        cursor.execute(f"INSERT INTO chat{otherIdentifier} (timestamp, senderIdentifier, type, extension, filePath, userFilename) VALUES (?, ?, ?, ?, ?, ?)", (timestamp, identifier, "file", extension, f"uploads{identifier}/{identifier}--{otherIdentifier}--{timestamp}.bin", filename))
+        conn.commit()
+        return {"status": "success"}
+    except Exception as e:
+        peer.logger.error(f"Error {e} in SendFile", exc_info=True)
+    finally:
+        conn.close()
+
+@app.route('/api/GetFileData/<extension>/<path:filePath>', methods=['GET'])
+def GetFileData(extension, filePath):
+    try:
+        filePath = filePath.replace("%20", " ")
+        peer.logger.debug(f"filePath : {filePath}, extension : {extension}")
+        with open(filePath, "rb") as fileHandle:
+            encryptedBytes = fileHandle.read()
+        cipher = Fernet(peer.fernetKey)
+        fileBytes = cipher.decrypt(encryptedBytes)
+        fileIO = io.BytesIO(fileBytes)
+        mimeType, _ = mimetypes.guess_type("file." + extension)
+        
+        peer.logger.debug(f"MIME type : {mimeType}")
+        if(mimeType and "image" in mimeType):
+            image = Image.open(fileIO)
+            
+            if image.mode == 'RGBA':
+                image = image.convert('RGB')
+            
+            if(request.args.get('shouldCrop', 'False').lower() == "true"):
+                width, height = image.size
+                minHeight = min(height, int(request.args.get("maxHeight", 256)))
+                minWidth = min(width, int(request.args.get("maxWidth", 256)))
+                
+                peer.logger.debug(f"minHeight : {minHeight}, minWidth : {minWidth}")
+                left = (width - minWidth) // 2
+                top = (height - minHeight) // 2
+                right = left + minWidth
+                bottom = top + minHeight
+
+                image = image.crop((left, top, right, bottom))
+            
+            if(request.args.get("shouldResize", "False").lower() == "true"):
+                maxSize = (int(request.args.get("maxWidth", 256)), int(request.args.get("maxHeight", 256)))
+                image.thumbnail(maxSize, Image.LANCZOS)
+            
+            fileIO = io.BytesIO()
+            image.save(fileIO, format=image.format or "JPEG")
+            fileIO.seek(0)
+        
+        return send_file(
+            fileIO,
+            mimetype= mimeType,
+            as_attachment=False
+        )
+    except Exception as e:
+        peer.logger.error(f"Error {e} in GetFileData", exc_info=True)
+    
 if __name__ == "__main__":
     #Starting Website
     frontendPort = int(input("FRONTEND PORT : "))
