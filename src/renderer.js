@@ -63,6 +63,31 @@ function SetSidebar() {
     document.getElementById('keyIcon').addEventListener('click', () => {
         window.electronAPI.navigateTo('keydisplay.html');
     });
+
+    //Shutdown page
+    document.getElementById("shutdownIcon").addEventListener("dblclick", () => {
+      console.log('Double-click detected!');
+      Shutdown();
+    });
+}
+
+async function Shutdown() {
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/Post/Shutdown`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({"shutdown" : "True"})
+    });
+
+    const data = await response.json();
+    console.log("POST Response in Shutdown:", data);
+    window.electronAPI.closeApp();
+    
+  } catch (error) {
+    console.error("Error posting data:", error);
+  }
 }
 
 async function GetSavedUsers() {
@@ -140,6 +165,24 @@ async function SendFile(dataToSend, otherIdentifier) {
   }
 }
 
+async function DownloadFile(filePath, extension, outputFolder, filename){
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/Post/DownloadFile`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({"filePath" : filePath, "extension" : extension, "outputFolder" : outputFolder, "filename" : filename})
+    });
+
+    const data = await response.json();
+    console.log("POST Response in DownloadFile:", data);
+    
+  } catch (error) {
+    console.error("Error posting data:", error);
+  }
+}
+
 function DisplayMessages(messagesToDisplay, messagerIdentifier, chatID, banner="") {
   let chat = document.getElementById(chatID);
   chat.innerHTML = "";
@@ -166,22 +209,36 @@ function DisplayMessages(messagesToDisplay, messagerIdentifier, chatID, banner="
       if(messageToDisplay[0] === "message"){
         div.innerHTML = messageToDisplay[3].replaceAll("\n", "<br>");
       }
-      else if(messageToDisplay[0] === "file" && (imageExtensions.includes(messageToDisplay[3]))){
-        div.innerHTML = `<img src="/api/GetFileData/${messageToDisplay[3]}/${messageToDisplay[4]}?shouldCrop=True" alt="Photo">`
-        div.addEventListener("click", () => {
-          if(page === "chat"){
-            console.log("Image Clicked!");
-            document.querySelector(".chat").style.display = "none";
-            const imageViewer =  document.getElementById("imageViewer");
-            imageViewer.style.display = "flex";
-            imageViewer.innerHTML = `<button class="displayText button underlineFade" id="imageViewerReturnToMessages">Return To Chat</button>`
-            imageViewer.innerHTML += `<img src="/api/GetFileData/${messageToDisplay[3]}/${messageToDisplay[4]}?shouldResize=True&maxHeight=512&maxWidth=1024" alt="Photo">`
-            document.getElementById("imageViewerReturnToMessages").addEventListener("click", () => {
-              document.getElementById("imageViewer").style.display = "none";
-              document.querySelector(".chat").style.display = "flex";
-            });
-          }
-        });
+      else if(messageToDisplay[0] === "file"){
+        if(imageExtensions.includes(messageToDisplay[3])) {
+          div.innerHTML = `<img src="/api/GetFileData/${messageToDisplay[3]}/${messageToDisplay[4]}?shouldCrop=True" alt="Photo">`
+          div.addEventListener("click", () => {
+            if(page === "chat"){
+              console.log("Image Clicked!");
+              document.querySelector(".chat").style.display = "none";
+              const imageViewer =  document.getElementById("imageViewer");
+              imageViewer.style.display = "flex";
+              imageViewer.innerHTML = `<button class="displayText button underlineFade" id="imageViewerReturnToMessages">Return To Chat</button>`
+              imageViewer.innerHTML += `<button class="displayText button underlineFade" id="imageViewerDownload">Download File</button>`
+              imageViewer.innerHTML += `<img src="/api/GetFileData/${messageToDisplay[3]}/${messageToDisplay[4]}?shouldResize=True&maxHeight=512&maxWidth=1024" alt="Photo">`
+              document.getElementById("imageViewerReturnToMessages").addEventListener("click", () => {
+                document.getElementById("imageViewer").style.display = "none";
+                document.querySelector(".chat").style.display = "flex";
+              });
+              document.getElementById("imageViewerDownload").addEventListener("click", () => {
+                DownloadFile(messageToDisplay[4], messageToDisplay[3], "downloads", messageToDisplay[5])
+              });
+            }
+          });
+        } 
+        else {
+          div.classList.add("underlineFade");
+          div.innerHTML = `📄${messageToDisplay[5].replaceAll("\n", "<br>")}.${messageToDisplay[3]}`;
+          div.style.cursor = "pointer";
+          div.addEventListener("click", () => {
+            DownloadFile(messageToDisplay[4], messageToDisplay[3], "downloads", messageToDisplay[5])
+          });
+        }
       }
       div.innerHTML = div.innerHTML + `<div class="timestamp">${messageTimestamp}</div>`;
       chat.appendChild(div);
@@ -341,7 +398,7 @@ async function SendMessage(messageBox, otherUserIdentifier) {
 
   const pad = (n) => n.toString().padStart(2, '0');
   const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
-  messages.push([timestamp, identifier, messageBox.value]);
+  messages.push(["message", timestamp, identifier, messageBox.value]);
   DisplayMessages(messages, targetedUserIdentifier, "chat", "contactBannerText");
 
   messageBox.value = "";
@@ -534,6 +591,7 @@ socket.on('newMessageIncoming', (msg) => {
   //Notification
   console.debug(`SEND NOTIFICATIONS : ${sendNotifications}`);
   if(sendNotifications){
+    console.debug("Sending Notification");
     let notificationBody = msg.message.slice(0, notificationMaxLengthChars);
     if(notificationBody.length + 3 < msg.message.length) notificationBody += "...";
     else notificationBody = msg.message.slice(0, notificationMaxLengthChars + 3);
@@ -544,6 +602,13 @@ socket.on('newMessageIncoming', (msg) => {
   }
 
 });
+
+socket.on('onlineUsersUpdate', (msg) => {
+  console.debug(`New online users : ${msg.onlineUsers} ${typeof(msg.onlineUsers)} ${typeof(onlineUsers)}`);
+  onlineUsers = msg.onlineUsers;
+  DisplaySetUsers("chatlistUL", "chat", "contactBannerText",0,"asc","false",true);
+  if(targetedUserIdentifier !== null) DisplayMessages(messages, targetedUserIdentifier, "chat", "contactBannerText");
+})
 
 console.log(`PAGE : ${page}`);
 if(page === "chat") InitChat();

@@ -61,7 +61,7 @@ body {
   display: flex;
   flex-direction: column;
   text-align: center;
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 #chatlist {
@@ -174,7 +174,7 @@ body {
 }
 
 .sidebarElement {
-  height: 30%;
+  height: 15%;
   font-size : 30px;
   color : var(--backgroundColour);
   display: flex;
@@ -555,4 +555,20 @@ input:checked + .slider:before {
   width : 90px;
   padding : 5px;
   cursor : pointer;
+}
+
+#imageViewerDownload {
+  position: absolute;
+  top: 60px;
+  left: 8px;
+  font-size: 12px;
+  color: var(--mainColour);
+  background-color: var(--backgroundColour);
+  width : 90px;
+  padding : 5px;
+  cursor : pointer;
+}
+
+#shutdownIcon {
+  margin-top: auto;
 }

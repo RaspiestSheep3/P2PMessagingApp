@@ -3,7 +3,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  navigateTo: (page) => ipcRenderer.send('navigate-to', page)
+  navigateTo: (page) => ipcRenderer.send('navigate-to', page),
+  closeApp: () => ipcRenderer.send('close-app')
 });
 
 //!TEMP - FOR TESTING MULTIPLE USERS

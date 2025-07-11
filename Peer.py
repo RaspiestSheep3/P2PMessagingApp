@@ -13,6 +13,7 @@ import sqlite3
 import re
 import keyring
 import queue
+import signal
 import io
 import mimetypes
 from PIL import Image
@@ -318,7 +319,11 @@ class Peer():
                             self.onlineUsersDict[message["identifier"]] = True
                         self.logger.debug(f"New Online Users Dict : {self.onlineUsersDict}")
                         peerSocket.send(json.dumps({"type" : "isOnlineResponse" , "valid" : "true" , "identifier" : identifier}).encode().ljust(self.messagePadLength, b"\0"))
-                    
+
+                        socketio.emit("onlineUsersUpdate", {
+                            "onlineUsers" : list(self.onlineUsersDict.keys())
+                        })
+                        
                     elif(message["type"] == "isOnlineResponse"):
                         self.logger.debug(f"Recieved isOnlineResponse from {message['identifier']}")
                         with self.onlineUsersDictLock:
@@ -391,6 +396,14 @@ class Peer():
                             
                         cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, type, extension, filePath, userFilename) VALUES (?, ?, ?, ?, ?, ?)", (messageTimestamp, senderIdentifier, "file", extension, f"uploads{identifier}/{senderIdentifier}--{identifier}--{messageTimestamp}.bin", userFilename))
                         conn.commit()
+                    elif(message["type"] == "userDisconnect"):
+                        self.logger.debug(f"{message['identifier']} has disconnected")
+                        del self.onlineUsersDict[message["identifier"]]
+                        
+                        socketio.emit("onlineUsersUpdate", {
+                            "onlineUsers" : list(self.onlineUsersDict.keys())
+                        })
+                        
                     elif(message["type"] == "message"):
                         self.logger.debug(f"message in ListenForMessages : {message}")
                         nonce = base64.b64decode(message["nonce"])
@@ -439,6 +452,7 @@ class Peer():
                         
                         #Alerting frontend about the new message
                         socketio.emit("newMessageIncoming", {
+                            "type" : "message",
                             "timestamp" : timestamp,
                             "senderIdentifier" : senderIdentifier,
                             "message" : plaintext
@@ -903,6 +917,19 @@ class Peer():
         except Exception as e:
             self.logger.error(f"Error {e} in GetDetailsOfUser", exc_info=True)
 
+    def Shutdown(self):
+        #Closing all sessions
+        for onlineUser in self.onlineUsersDict:
+            self.logger.debug(f"Now disconnecting from {onlineUser}")
+            if not(onlineUser in self.activeSBytes):
+                self.StartSession(otherIdentifier=onlineUser)
+            self.openConnections[onlineUser].send(json.dumps({"type" : "userDisconnect", "identifier" : identifier}).encode().ljust(self.messagePadLength, b"\0"))
+            sleep(0.5)
+            self.EndSession(onlineUser)
+            self.logger.debug(f"Now disconnected from {onlineUser}")
+        
+        
+
     def GeneratePrime(self, bitLength):
         while True:
             # Generate random odd number of desired bit length
@@ -1183,7 +1210,40 @@ def GetFileData(extension, filePath):
         )
     except Exception as e:
         peer.logger.error(f"Error {e} in GetFileData", exc_info=True)
+
+@app.route('/api/Post/DownloadFile', methods=['POST'])
+def DownloadFile():
+    content = request.json
+    extension = content["extension"]
+    filePath = content["filePath"]
+    outputFolder = content["outputFolder"]
+    fileName = content["filename"]
     
+    with open(filePath, "rb") as fileHandle:
+        encryptedBytes = fileHandle.read()
+    cipher = Fernet(peer.fernetKey)
+    fileBytes = cipher.decrypt(encryptedBytes)
+    
+    os.makedirs(outputFolder, exist_ok=True)
+    with open(f"{outputFolder}/{fileName}.{extension}", "wb") as fileHandle:
+        fileHandle.write(fileBytes)
+
+    return {"status": "success"}
+
+@app.route('/api/Post/Shutdown', methods=['POST'])
+def Shutdown():
+    content = request.json
+    if(content["shutdown"].lower() == "true"):
+        peer.Shutdown()
+
+    def KillSystem():
+        sleep(0.5) #Giving time for frontend to get the shutdown message
+        os.kill(os.getpid(), signal.SIGINT)
+        
+    threading.Thread(target = KillSystem, daemon=True).start()
+
+    return {"status": "success"}
+
 if __name__ == "__main__":
     #Starting Website
     frontendPort = int(input("FRONTEND PORT : "))

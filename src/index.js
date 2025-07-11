@@ -29,6 +29,10 @@ const createWindow = () => {
     icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+
+      contextIsolation: true, 
+      nodeIntegration: false, 
+
       //!TEMP - FOR TESTING MULTIPLE USERS
       additionalArguments: [`--backendPort=${backendPort}`]
     },
@@ -71,4 +75,8 @@ const { ipcMain } = require('electron');
 
 ipcMain.on('navigate-to', (event, page) => {
   mainWindow.loadURL(`http://localhost:${Number(backendPort)}/api/LoadPage/${page}`);
+});
+
+ipcMain.on('close-app', () => {
+  app.quit();
 });
