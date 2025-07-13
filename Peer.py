@@ -15,7 +15,8 @@ import keyring
 import queue
 import signal
 import io
-import mimetypes
+import mimetypes  
+from uuid import uuid4
 from PIL import Image
 from time import sleep
 from datetime import datetime
@@ -394,7 +395,7 @@ class Peer():
                         with open(f"uploads{identifier}/{senderIdentifier}--{identifier}--{messageTimestamp}.bin", "wb") as fileHandle:
                             fileHandle.write(ciphertextFernet)
                             
-                        cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, type, extension, filePath, userFilename) VALUES (?, ?, ?, ?, ?, ?)", (messageTimestamp, senderIdentifier, "file", extension, f"uploads{identifier}/{senderIdentifier}--{identifier}--{messageTimestamp}.bin", userFilename))
+                        cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, type, extension, filePath, userFilename, messageRandomisation) VALUES (?, ?, ?, ?, ?, ?, ?)", (messageTimestamp, senderIdentifier, "file", extension, f"uploads{identifier}/{senderIdentifier}--{identifier}--{messageTimestamp}.bin", userFilename, uuid4().hex))
                         conn.commit()
                     elif(message["type"] == "userDisconnect"):
                         self.logger.debug(f"{message['identifier']} has disconnected")
@@ -403,6 +404,46 @@ class Peer():
                         socketio.emit("onlineUsersUpdate", {
                             "onlineUsers" : list(self.onlineUsersDict.keys())
                         })
+                        
+                    elif(message["type"] == "deleteMessage"):
+                        self.logger.debug(f"Deleting message {message}")
+                        messageData = message["messageData"]
+                        self.logger.debug(f"messageData : {messageData}")
+                        cursor.execute(f'''
+                            SELECT * FROM chat{message["identifier"]} WHERE timestamp = ? AND
+                            senderIdentifier = ? AND type = ?''', (messageData["timestamp"], messageData["identifier"], messageData["type"]))
+                        
+                        row = cursor.fetchone()
+                        
+                        cursor.execute(f'''
+                            DELETE FROM chat{message["identifier"]} WHERE timestamp = ? AND
+                            senderIdentifier = ? AND type = ?''', (messageData["timestamp"], messageData["identifier"], messageData["type"]))
+                        conn.commit()
+                        self.logger.debug("Now deleted message")
+                        if(row[3] == "message"):
+                            cipher = Fernet(peer.fernetKey)
+                            deletedRow = {
+                                "timestamp" : row[0],
+                                "identifier" : row[1],
+                                "message" : cipher.decrypt(row[2]).decode(),
+                                "type" : row[3],
+                                "messageRandomisation" : row[7],
+                            }
+                        elif(row[3] == "file"):
+                            deletedRow = {
+                                "timestamp"  : row[0],
+                                "identifier" : row[1],
+                                "type" : row[3],
+                                "extension" : row[4],
+                                "filePath" : row[5],
+                                "userFilename" : row[6],
+                                "messageRandomisation" : row[7],
+                            }
+                        
+                        #Alerting frontend about the new message
+                        socketio.emit("newMessageDelete", deletedRow)
+                        
+                        self.logger.debug(f"newMessageDelete : {deletedRow}")
                         
                     elif(message["type"] == "message"):
                         self.logger.debug(f"message in ListenForMessages : {message}")
@@ -447,17 +488,22 @@ class Peer():
                         messageFernet = cipher.encrypt(plaintext.encode())
                         
                         #Adding message to the SQL
-                        cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, message, type) VALUES (?, ?, ?, ?)", (timestamp, senderIdentifier, messageFernet, "message"))
+                        uuid = uuid4().hex
+                        cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, message, type, messageRandomisation) VALUES (?, ?, ?, ?, ?)", (timestamp, senderIdentifier, messageFernet, "message", uuid))
                         conn.commit()
                         
-                        #Alerting frontend about the new message
-                        socketio.emit("newMessageIncoming", {
-                            "type" : "message",
+                        socketIoEmit = {
                             "timestamp" : timestamp,
                             "senderIdentifier" : senderIdentifier,
-                            "message" : plaintext
-                        })
-             
+                            "message" : plaintext,
+                            "type" : "message",
+                            "messageRandomisation" : uuid
+                        }
+                        #Alerting frontend about the new message
+                        socketio.emit("newMessageIncoming", socketIoEmit)
+                        
+                        self.logger.debug(f"socketIOEmit : {socketIoEmit}")
+                        
             self.logger.debug(f"WHILE LOOP FINISHED : {(senderIdentifier in self.openConnections)}, {(peerSocket.fileno() != -1)}")       
         except Exception as e:
             self.logger.error(f"Error {e} in ListenForMessages", exc_info=True)
@@ -558,7 +604,9 @@ class Peer():
                     type TEXT NOT NULL,
                     extension TEXT,
                     filePath TEXT UNIQUE,
-                    userFilename TEXT
+                    userFilename TEXT,
+                    messageRandomisation TEXT NOT NULL,
+                    CONSTRAINT timestampRandomisation UNIQUE (timestamp, messageRandomisation)
                 )
                 ''')
                 conn.commit()
@@ -620,7 +668,7 @@ class Peer():
             messageFernet = cipher.encrypt(messageData)
 
             #Adding message to the SQL
-            cursor.execute(f"INSERT INTO chat{recipientIdentifier} (timestamp, senderIdentifier, message, type) VALUES (?, ?, ?, ?)", (messagePayloadRaw["timestamp"], identifier, messageFernet, "message"))
+            cursor.execute(f"INSERT INTO chat{recipientIdentifier} (timestamp, senderIdentifier, message, type, messageRandomisation) VALUES (?, ?, ?, ?, ?)", (messagePayloadRaw["timestamp"], identifier, messageFernet, "message", uuid4().hex))
             conn.commit()
         except Exception as e:
             self.logger.error(f"Error {e} in SendMessage", exc_info=True)
@@ -759,7 +807,9 @@ class Peer():
                 type TEXT NOT NULL,
                 extension TEXT,
                 filePath TEXT UNIQUE,
-                userFilename TEXT
+                userFilename TEXT,
+                messageRandomisation TEXT NOT NULL,
+                CONSTRAINT timestampRandomisation UNIQUE (timestamp, messageRandomisation)
             )
             ''')
             conn.commit()
@@ -849,9 +899,25 @@ class Peer():
             rowsOutput = []
             for row in rows:
                 if(row[3] == "message"):
-                    rowsOutput.append([row[3], row[0], row[1], cipher.decrypt(row[2]).decode()])
+                    #rowsOutput.append([row[3], row[0], row[1], cipher.decrypt(row[2]).decode(), row[7]])
+                    rowsOutput.append({
+                        "timestamp" : row[0],
+                        "identifier" : row[1],
+                        "message" : cipher.decrypt(row[2]).decode(),
+                        "type" : row[3],
+                        "messageRandomisation" : row[7]
+                    })
                 elif(row[3] == "file"):
-                    rowsOutput.append([row[3], row[0], row[1], row[4], row[5], row[6]])
+                    #rowsOutput.append([row[3], row[0], row[1], row[4], row[5], row[6], row[7]])
+                    rowsOutput.append({
+                        "timestamp"  : row[0],
+                        "identifier" : row[1],
+                        "type" : row[3],
+                        "extension" : row[4],
+                        "filePath" : row[5],
+                        "userFilename" : row[6],
+                        "messageRandomisation" : row[7]
+                    })
             
             if(reversed == "true" and sort=="asc") or (reversed=="false" and sort=="desc"):
                 rowsOutput = rowsOutput[::-1] #Making sure its in the right order
@@ -1155,7 +1221,7 @@ def SendFile():
         
         conn = sqlite3.connect(peer.databaseName)
         cursor = conn.cursor()
-        cursor.execute(f"INSERT INTO chat{otherIdentifier} (timestamp, senderIdentifier, type, extension, filePath, userFilename) VALUES (?, ?, ?, ?, ?, ?)", (timestamp, identifier, "file", extension, f"uploads{identifier}/{identifier}--{otherIdentifier}--{timestamp}.bin", filename))
+        cursor.execute(f"INSERT INTO chat{otherIdentifier} (timestamp, senderIdentifier, type, extension, filePath, userFilename, messageRandomisation) VALUES (?, ?, ?, ?, ?, ?, ?)", (timestamp, identifier, "file", extension, f"uploads{identifier}/{identifier}--{otherIdentifier}--{timestamp}.bin", filename, uuid4().hex))
         conn.commit()
         return {"status": "success"}
     except Exception as e:
@@ -1243,6 +1309,80 @@ def Shutdown():
     threading.Thread(target = KillSystem, daemon=True).start()
 
     return {"status": "success"}
+
+@app.route('/api/Post/DeleteMessage', methods=['POST'])
+def DeleteMessage():
+    content = request.json
+    peer.logger.debug(f"Content in DeleteMessage : {content}")
+    conn = sqlite3.connect(peer.databaseName)
+    cursor = conn.cursor()
+    if(content["deleteType"] == "me"):
+        cursor.execute(f'''
+        SELECT * FROM chat{content["otherIdentifier"]} WHERE timestamp = ? AND messageRandomisation = ?
+        ''', (content["timestamp"], content["messageRandomisation"]))
+        row = cursor.fetchone()
+        if(row[3] == "message"):
+            cipher = Fernet(peer.fernetKey)
+            deletedRow = {
+                "timestamp" : row[0],
+                "identifier" : row[1],
+                "message" : cipher.decrypt(row[2]).decode(),
+                "type" : row[3],
+                "messageRandomisation" : row[7]
+            }
+        elif(row[3] == "file"):
+            deletedRow = {
+                "timestamp"  : row[0],
+                "identifier" : row[1],
+                "type" : row[3],
+                "extension" : row[4],
+                "filePath" : row[5],
+                "userFilename" : row[6],
+                "messageRandomisation" : row[7]
+            }
+        cursor.execute(f'''
+        DELETE FROM chat{content["otherIdentifier"]} WHERE timestamp = ? AND messageRandomisation = ?
+        ''', (content["timestamp"], content["messageRandomisation"]))
+        conn.commit()
+        peer.logger.debug(f"DELETED ROWS")
+    elif(content["deleteType"] == "all"):
+        if not(content["otherIdentifier"] in peer.openConnections):
+            conn.close()
+            return {"status" : "failure", "reason" : "connection not open"}
+        
+        cursor.execute(f'''
+        SELECT * FROM chat{content["otherIdentifier"]} WHERE timestamp = ? AND messageRandomisation = ?
+        ''', (content["timestamp"], content["messageRandomisation"]))
+        row = cursor.fetchone()
+        if(row[3] == "message"):
+            cipher = Fernet(peer.fernetKey)
+            deletedRow = {
+                "timestamp" : row[0],
+                "identifier" : row[1],
+                "message" : cipher.decrypt(row[2]).decode(),
+                "type" : row[3],
+                "messageRandomisation" : row[7]
+            }
+        elif(row[3] == "file"):
+            deletedRow = {
+                "timestamp"  : row[0],
+                "identifier" : row[1],
+                "type" : row[3],
+                "extension" : row[4],
+                "filePath" : row[5],
+                "userFilename" : row[6],
+                "messageRandomisation" : row[7]
+            }
+        cursor.execute(f'''
+        DELETE FROM chat{content["otherIdentifier"]} WHERE timestamp = ? AND messageRandomisation = ?
+        ''', (content["timestamp"], content["messageRandomisation"]))
+        conn.commit()
+        peer.logger.debug(f"DELETED ROWS")
+        peer.openConnections[content["otherIdentifier"]].send(json.dumps({"type" : "deleteMessage", "identifier" : identifier, "messageData" : deletedRow}).encode().ljust(peer.messagePadLength, b"\0"))
+        peer.logger.debug(f"Sent delete request")
+        
+    conn.close()
+    return {"status": "success", "deletedRow" : deletedRow}
 
 if __name__ == "__main__":
     #Starting Website
