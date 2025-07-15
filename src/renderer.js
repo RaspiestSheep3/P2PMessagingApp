@@ -12,7 +12,9 @@ let sendNotifications = false;
 let maxMessageLength = 0;
 let use12hFormat = false;
 let activeSessions = [];
+let dateFormat = null;
 
+let currentlySendingSessionChange = false;
 //Consts 
 const stylesheet = document.documentElement.style;
 const now = new Date();
@@ -23,6 +25,14 @@ const onlineDisplayDict = {
   false : "🔴"
 };
 const imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'ico', 'svg', 'heic'];
+const dateFormatOptions = [
+  "DD/MM/YYYY", "DD/MM/YY",
+  "MM/DD/YYYY", "MM/DD/YY",
+  "YYYY/MM/DD", "YY/MM/DD",
+  "DD-MM-YYYY", "DD-MM-YY",
+  "MM-DD-YYYY", "MM-DD-YY",
+  "YYYY-MM-DD", "YY-MM-DD"
+]
 
 //!TEMP - FOR TESTING MULTIPLE USERS
 const backendPort = window.myAPI.backendPort;
@@ -42,6 +52,7 @@ async function GetDetails() {
     maxMessageLength = data["maxMessageLength"]
     sendNotifications = data["sendNotifications"].toLowerCase() === "true"
     use12hFormat = data["use12hFormat"].toLowerCase() === "true"
+    dateFormat = data["dateFormat"];
 
   } catch (error) {
       console.error("Fetch error:", error);
@@ -210,7 +221,41 @@ async function DeleteMessage(messageTimestamp, messageRandomisation, otherIdenti
 function DisplayMessages(messagesToDisplay, messagerIdentifier, chatID, banner="") {
   let chat = document.getElementById(chatID);
   chat.innerHTML = "";
+  let lastProcessedTime = "0000-00-00"
+
   messagesToDisplay.forEach(messageToDisplay => {
+      //Setting the timestamp things
+      let timestampDate = messageToDisplay.timestamp.slice(0, lastProcessedTime.length);  
+      if(timestampDate > lastProcessedTime){
+        const timestampDateSplit = timestampDate.split("-");
+        let timestampDisplay = "";
+        console.log(`Date Format : ${dateFormat}`);
+        
+        let containsDashes = null;
+        if(dateFormat.includes("-")){
+          dateFormat = dateFormat.replaceAll("-", "/");
+           containsDashes = true;
+        }
+        else  containsDashes = false;
+        switch (dateFormat) {
+          case "DD/MM/YYYY": timestampDisplay = `${timestampDateSplit[2]}/${timestampDateSplit[1]}/${timestampDateSplit[0]}`; break;
+          case "DD/MM/YY": timestampDisplay = `${timestampDateSplit[2]}/${timestampDateSplit[1]}/${timestampDateSplit[0].slice(2,4)}`; break;
+          case "DD/MM/YYYY": timestampDisplay = `${timestampDateSplit[1]}/${timestampDateSplit[2]}/${timestampDateSplit[0]}`; break;
+          case "MM/DD/YY": timestampDisplay = `${timestampDateSplit[1]}/${timestampDateSplit[2]}/${timestampDateSplit[0].slice(2,4)}`; break;
+          case "YYYY/MM/DD": timestampDisplay = `${timestampDateSplit[0]}/${timestampDateSplit[1]}/${timestampDateSplit[2]}`; break;
+          case "YY/MM/DD": timestampDisplay = `${timestampDateSplit[0].slice(2,4)}/${timestampDateSplit[1]}/${timestampDateSplit[2]}`; break;
+        }
+
+        if(containsDashes){
+          timestampDisplay = timestampDisplay.replaceAll("/", "-");
+          dateFormat = dateFormat.replaceAll("/", "-");
+        }
+        
+        console.log(`timestampDisplay : ${timestampDisplay} ${dateFormat} ${containsDashes}`);
+        chat.innerHTML += `<div class="chatTimestamp displayText">${timestampDisplay}</div>`;
+        lastProcessedTime = timestampDate;
+      }
+
       const div = document.createElement("div");
       div.className = "displayText message";
 
@@ -293,6 +338,7 @@ function DisplayMessages(messagesToDisplay, messagerIdentifier, chatID, banner="
 
   if( page==="chat"){
     document.getElementById("uploadFileButton").addEventListener("click", () => {
+      if(!activeSessions.includes(targetedUserIdentifier)) return;
       document.getElementById("fileInput").click();
     });
 
@@ -465,6 +511,7 @@ function SetupMessenger() {
   })
 
   messageSendButton.addEventListener("click", () => {
+    if(!activeSessions.includes(targetedUserIdentifier)) return;
      charCount.textContent = `0/${maxMessageLength}`;
     SendMessage(messageBox, targetedUserIdentifier);
   });
@@ -491,6 +538,41 @@ function SetupSettingButtons() {
     use12hFormat = event.target.checked;
     SetSetting("use12hFormat", String(use12hFormat));
   });
+
+  //Setting Date Format buttons
+  const dateFormatButton = document.getElementById("dateFormatDropdownButton");
+  dateFormatButton.textContent = dateFormat;
+  const dropdownContent = document.getElementById("dateFormatDropdown");
+  dropdownContent.innerHTML = "";
+  dateFormatOptions.forEach(format => {
+    const div = document.createElement("div");
+    div.addEventListener("click", () => {
+      const associatedFormat = div.getAttribute("data-format");
+      console.log(associatedFormat);
+      dateFormat = associatedFormat;
+      dateFormatButton.textContent = associatedFormat;
+      SetSetting("dateFormat", associatedFormat);
+      dropdownContent.style.display = "none";
+    });
+    div.className = "underlineFade displayText dropdownElement"
+    div.dataset.format = format;
+    div.textContent = format;
+    dropdownContent.appendChild(div);
+    
+  });
+  
+  let dateFormatButtonActive = false;
+  dateFormatButton.addEventListener("click", () => {
+    console.log("clicked");
+    if(dateFormatButtonActive){
+      dropdownContent.style.display = "none";
+      dateFormatButtonActive = false
+    }
+    else{
+      dropdownContent.style.display = "block";
+      dateFormatButtonActive = true;
+    }
+  });
 }
 
 async function ChangeSession(otherUserIdentifier, type){
@@ -501,25 +583,34 @@ async function ChangeSession(otherUserIdentifier, type){
       },
       body: JSON.stringify({"identifier" : otherUserIdentifier, "type" : type})
   });
-  console.log(response);
+  console.log("Response in ChangeSession :", response);
+  //SetSessionButton(otherUserIdentifier);
 }
 
 function SetSessionButton(otherUserIdentifier) {
   const buttonElement = document.getElementById("StartSessionButton");
+  console.log("Active sessions in SetSessionButton :", activeSessions);
   if(activeSessions.includes(otherUserIdentifier)) buttonElement.textContent = "End Session";
   else buttonElement.textContent = "Start Session";
-  buttonElement.addEventListener("click", () => {
+  buttonElement.addEventListener("click", async () => {
+    if(currentlySendingSessionChange) return;
+
     if(activeSessions.includes(otherUserIdentifier)){
       console.debug("Closing session");
       activeSessions.splice(activeSessions.indexOf(otherUserIdentifier), 1);
+      console.debug("New active sessions:", activeSessions);
+      currentlySendingSessionChange = true;
+      await ChangeSession(otherUserIdentifier, "end");
+      currentlySendingSessionChange = false;
       buttonElement.textContent = "Start Session";
-      ChangeSession(otherUserIdentifier, "end");
     }
     else {
       console.debug("Starting session");
       activeSessions.push(otherUserIdentifier);
+      currentlySendingSessionChange = true;
+      await ChangeSession(otherUserIdentifier, "start");
+      currentlySendingSessionChange = false;
       buttonElement.textContent = "End Session";
-      ChangeSession(otherUserIdentifier, "start");
     }
   });
 }
@@ -559,6 +650,20 @@ function SetAddUserButton(){
   });
 }
 
+async function GetSessions(){
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/GetOpenSessions`);
+    if (!response.ok) throw new Error("Network response was not OK");
+    const data = await response.json();
+    
+    console.log("Open sessions :", data);
+    return Object.keys(data).filter(key => data[key]);
+
+  } catch (error) {
+    console.error("Fetch error:", error);
+  }
+}
+
 async function InitChat() {
   await GetDetails();
   console.debug("GOT DETAILS");
@@ -577,6 +682,8 @@ async function InitChat() {
   console.debug("SET MESSENGER");
   SetAddUserButton();
   console.debug("Set Add User Button");
+  activeSessions = await GetSessions();
+  console.debug("Got open sessions");
   themes = await GetThemes();
   console.debug("GOT THEMES");
   UpdateCSSTheme(currentTheme);
@@ -645,10 +752,12 @@ socket.on('newMessageIncoming', (msg) => {
     let notificationBody = msg.message.slice(0, notificationMaxLengthChars);
     if(notificationBody.length + 3 < msg.message.length) notificationBody += "...";
     else notificationBody = msg.message.slice(0, notificationMaxLengthChars + 3);
-    new Notification(`New Message from ${msg.senderIdentifier}`, 
+    const notif = new Notification(`New Message from ${msg.displayName}`, 
       { "body" : notificationBody,
         "icon" : `http://localhost:${backendPort}/api/static/icons/favicon.ico`
       });
+    
+    setTimeout(() => notif.close(), 3000);
   }
 
 });
@@ -664,6 +773,17 @@ socket.on("newMessageDelete", async (msg) => {
   console.debug("Received newMessageDelete")
   messages = await GetMessages(targetedUserIdentifier, 0, "asc", "false");
   DisplayMessages(messages, targetedUserIdentifier, "chat", "contactBannerText");
+});
+
+socket.on("activeSessionsUpdate", (msg) => {
+  onlineUsers[msg.identifier] = msg.status;
+  console.log("activeSessionsUpdateStatus", msg.status, typeof(msg.status));
+  if(msg.status === false) activeSessions.splice(activeSessions.indexOf(msg.identifier), 1);
+  else activeSessions.push(msg.identifier);
+  if(targetedUserIdentifier === msg.identifier){
+    console.log("Setting button", activeSessions);
+    SetSessionButton(msg.identifier);
+  } 
 });
 
 console.log(`PAGE : ${page}`);

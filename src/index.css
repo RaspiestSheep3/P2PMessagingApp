@@ -592,3 +592,66 @@ input:checked + .slider:before {
 .delMe {
   top : 52%;
 }
+
+.chatTimestamp{
+  text-align: center;
+  border : 2px solid var(--accentColour);
+  border-radius: 10px;
+  width: 15%;
+  justify-content: center;
+  margin: 0 auto;
+  padding: 5px;
+  color: var(--accentColour);
+}
+
+#dateFormat {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  width: 50%;
+  padding: 10px 20px; 
+  position : relative;
+}
+
+.dropbtn {
+  background-color: var(--backgroundColour);
+  border: 2px solid var(--accentColour);
+  border-radius: 20px;
+  color: var(--accentColour);
+  padding: 10px 16px;
+  font-size: 16px;
+}
+
+#dateFormatDropdown {
+  display: none;
+  /*position: absolute; */
+  background-color: var(--backgroundColour);
+  min-width: 160px;
+  border-radius: 4px;
+  z-index: 1;
+  max-height: 100px;
+  overflow-y: auto;
+  position : absolute;
+  left : 75%;
+  top : 100%;
+}
+
+#dateFormatDropdown::-webkit-scrollbar { 
+  display: none;
+}
+
+.dropdownElement {
+  border: 2px solid var(--accentColour);
+  border-radius: 10px;
+  margin : 3px;
+  padding: 3px;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.dropdownElement:hover {
+  background-color: var(--accentColour);
+  color: var(--backgroundColour);
+  transition: 0.2s;
+}

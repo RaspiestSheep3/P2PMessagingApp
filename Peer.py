@@ -297,11 +297,20 @@ class Peer():
                         sleep(1)
                         peerSocket.shutdown(socket.SHUT_RDWR)
                         peerSocket.close()
+                        self.logger.warning(f"Old OpenConnections in ListenForMessages : {self.openConnections}")
+                        
                         del self.openConnections[senderIdentifier]
                         del self.activeAESKeys[senderIdentifier]
                         del self.activeSBytes[senderIdentifier]
                         
                         self.logger.warning(f"New OpenConnections in ListenForMessages : {self.openConnections}")
+                        
+                        #Updating frontend
+                        socketio.emit("activeSessionsUpdate", {
+                            "identifier" : senderIdentifier,
+                            "status" : senderIdentifier in self.openConnections
+                        })
+                        
                         return
                     
                     elif(message["type"] == "closeSocketResponse"):
@@ -495,6 +504,7 @@ class Peer():
                         socketIoEmit = {
                             "timestamp" : timestamp,
                             "senderIdentifier" : senderIdentifier,
+                            "displayName" : self.knownUsers[senderIdentifier].displayName,
                             "message" : plaintext,
                             "type" : "message",
                             "messageRandomisation" : uuid
@@ -623,6 +633,11 @@ class Peer():
                 #Making queue
                 if(senderIdentifier not in self.messagingQueues):
                     self.messagingQueues[senderIdentifier] = queue.Queue()
+                
+                socketio.emit("activeSessionsUpdate", {
+                    "identifier" : senderIdentifier,
+                    "status" : senderIdentifier in self.openConnections
+                })
                 
                 threading.Thread(target = self.ListenForMessages, args=(peerSocket, senderIdentifier, sBytes, AESKey, senderPublicKey), daemon=True).start()
                 threading.Thread(target=self.MessageSender, args=(senderIdentifier,)).start()
@@ -841,7 +856,7 @@ class Peer():
         with self.connectionLocks[otherUserIdentifier]:
             connectionSocket = self.openConnections[otherUserIdentifier]
             connectionSocket.send(json.dumps({"type" : "closeSocket"}).encode().ljust(self.messagePadLength, b"\0"))
-            
+        return True
         
     def CalculateMessage(self, AESKey, plaintext, sBytes, edPrivateKey, messageType="message"):
         try:
@@ -1050,7 +1065,8 @@ if not os.path.exists(peerDetailsFilename):
         json.dump(
         {   "theme" : "Sea",
             "sendNotifications" : "true",
-            "use12hFormat" : "false"
+            "use12hFormat" : "false",
+            "dateFormat" : "DD/MM/YY"
         }, fileHandle, indent=4) 
 
 @app.route('/api/LoadPage/<page>')
@@ -1074,7 +1090,8 @@ def GetDetails():
                 "use12hFormat" : details["use12hFormat"],
                 "publicKey" : peer.VisualisePublicKey(identifier),
                 "displayName" : displayName,
-                "maxMessageLength" : peer.messageLength
+                "maxMessageLength" : peer.messageLength,
+                "dateFormat" : details["dateFormat"]
             })
         
     except Exception as e:
@@ -1157,10 +1174,14 @@ def ChangeSession():
     peer.logger.debug(f"Recieved Change Session Request For {identifier} : {content['type'].lower()}")
     if(identifier in peer.openConnections and content["type"].lower() == "end"):
         peer.logger.debug(f"Ending session with {identifier}")
-        peer.EndSession(identifier)
+        output = peer.EndSession(identifier)
+        if(output == None):
+            return jsonify({"status" : "failure"})
     elif(identifier not in peer.openConnections) and (content["type"].lower() == "start"):
         peer.logger.debug(f"Starting session with {identifier}")
-        peer.StartSession(identifier)
+        output = peer.StartSession(identifier)
+        if(output == None):
+            return jsonify({"status" : "failure"})
     return jsonify({"status" : "success"})
 
 @app.route('/api/Post/AddNewUser', methods=['POST'])
@@ -1383,6 +1404,12 @@ def DeleteMessage():
         
     conn.close()
     return {"status": "success", "deletedRow" : deletedRow}
+
+@app.route('/api/GetOpenSessions', methods=['GET'])
+def GetOpenSessions():
+    output = {user : user in peer.openConnections for user in peer.knownUsers}
+    peer.logger.debug(f"Output in GetOpenSessions : {output}")
+    return output
 
 if __name__ == "__main__":
     #Starting Website
