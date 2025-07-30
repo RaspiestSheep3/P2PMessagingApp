@@ -655,3 +655,57 @@ input:checked + .slider:before {
   color: var(--backgroundColour);
   transition: 0.2s;
 }
+
+#messageSettingBar{
+  position: absolute;
+  bottom : 110%;
+  display : flex;
+  flex-direction: row;
+  width : 100%;
+  align-items: center;
+}
+
+.messageSettingButton{
+  padding: 5px;
+  transition: 0.5s;
+  margin : 0px 5px;
+}
+
+.inverseAccent{
+  color : var(--backgroundColour);
+  background-color: var(--accentColour);
+}
+
+.messageSettingsDiv {
+  border: 2px solid var(--accentColour);
+  border-radius: 10px;
+  max-width : 35%;
+  margin: 0px 5px;
+  max-height : 100%;
+  background-color: var(--backgroundColour);
+  text-align: center;
+  transition: max-height 0.5s ease, max-width 0.5s ease, padding 0.5s ease;
+  padding : 5px;
+  display: block;
+  color : var(--accentColour);
+}
+
+.messageSettingsInput {
+  color : var(--accentColour);
+  background-color: var(--backgroundColour);
+  border : none;
+  max-width : 60%;
+   transition: max-width 0.3s ease, padding 0.3s ease;
+}
+
+.messageSettingsDiv.collapsed {
+  max-height: 0;
+  max-width: 0%;
+  padding: 0;
+  overflow: hidden;
+  transition: max-height 0.5s ease, max-width 0.5s ease, padding 0.5s ease;
+}
+
+.hidden {
+  display: none;
+}

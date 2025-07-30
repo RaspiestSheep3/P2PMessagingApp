@@ -13,6 +13,8 @@ let maxMessageLength = 0;
 let use12hFormat = false;
 let activeSessions = [];
 let dateFormat = null;
+let timeoutTime = "";
+let displayTime = "";
 
 let currentlySendingSessionChange = false;
 //Consts 
@@ -473,13 +475,13 @@ function UserSearchBar(ul, searchBar) {
   });
 }
 
-async function SendMessage(messageBox, otherUserIdentifier) {
+async function SendMessage(messageBox, otherUserIdentifier, timeout, displayTime) {
   const response = await fetch(`http://127.0.0.1:${backendPort}/api/Post/SendMessageToUser/${otherUserIdentifier}`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({"message" : messageBox.value})
+        body: JSON.stringify({"message" : messageBox.value, "timeout" : timeout, "displayTime" : displayTime})
     });
   console.log(response, "in SendMessage");
 
@@ -499,6 +501,50 @@ async function SendMessage(messageBox, otherUserIdentifier) {
   messageBox.value = "";
 }
 
+function FormatTimeSettings(messageTimeoutText, displayTimeText) {
+  //Formatting
+  let messageTimeoutObject = {
+    "days" : 0,
+    "hours" : 0,
+    "minutes" : 0,
+    "seconds" : 0
+  };
+
+  let displayTimeObject = {
+    "days" : 0,
+    "hours" : 0,
+    "minutes" : 0,
+    "seconds" : 0
+  };
+
+  const matchesTimeout = messageTimeoutText.match(/\d+[dhms]/gi) || [];
+  const matchesDisplayTime = displayTimeText.match(/\d+[dhms]/gi) || [];
+  matchesTimeout.forEach(element => {
+    if (element.includes("d")) {
+      messageTimeoutObject.days = Number(element.replace("d", ""));
+    } else if (element.includes("h")) {
+      messageTimeoutObject.hours = Number(element.replace("h", ""));
+    } else if (element.includes("m")) {
+      messageTimeoutObject.minutes = Number(element.replace("m", ""));
+    } else if (element.includes("s")) {
+      messageTimeoutObject.seconds = Number(element.replace("s", ""));
+    }
+  });
+  matchesDisplayTime.forEach(element => {
+    if (element.includes("d")) {
+      displayTimeObject.days = Number(element.replace("d", ""));
+    } else if (element.includes("h")) {
+      displayTimeObject.hours = Number(element.replace("h", ""));
+    } else if (element.includes("m")) {
+      displayTimeObject.minutes = Number(element.replace("m", ""));
+    } else if (element.includes("s")) {
+      displayTimeObject.seconds = Number(element.replace("s", ""));
+    }
+  });
+
+  return [messageTimeoutObject, displayTimeObject];
+}
+
 function SetupMessenger() {
   const messageBox = document.getElementById("messagingInputField");
   const messageSendButton = document.getElementById("sendMessageButton");
@@ -512,8 +558,23 @@ function SetupMessenger() {
 
   messageSendButton.addEventListener("click", () => {
     if(!activeSessions.includes(targetedUserIdentifier)) return;
-     charCount.textContent = `0/${maxMessageLength}`;
-    SendMessage(messageBox, targetedUserIdentifier);
+    if(messageBox.value.trim() === "") return;
+
+    //Doing checks on the message settings
+    const messageTimeoutText = document.getElementById("setTimeoutSettingsInput").value.trim();
+    const displayTimeText = document.getElementById("setDisplayTimeSettingsInput").value.trim();
+
+    const pattern = /^(\d+d)?(\s?\d+h)?(\s?\d+m)?(\s?\d+s)?$/i; //Regex sorcery to make sure the input is valid
+    
+    console.debug("Doing the regex check");
+    if(messageTimeoutText.trim() !== "" && !pattern.test(messageTimeoutText)) return;
+    if(displayTimeText.trim() !== "" && !pattern.test(displayTimeText)) return;
+    console.debug("Passed the regex check");
+
+    const [messageTimeoutObject, displayTimeObject] = FormatTimeSettings(messageTimeoutText, displayTimeText);
+
+    charCount.textContent = `0/${maxMessageLength}`;
+    SendMessage(messageBox, targetedUserIdentifier, messageTimeoutObject, displayTimeObject);
   });
 }
 
@@ -664,6 +725,25 @@ async function GetSessions(){
   }
 }
 
+function SetMessageButtons(){
+  const messageButtons = document.querySelectorAll(".messageSettingButton");
+  messageButtons.forEach(button => {
+    button.addEventListener("click", () => {
+      if(button.classList.contains("inverseAccent")){
+        //document.getElementById(button.dataset.relevantinput).style.display = "none";
+        document.getElementById(`${button.dataset.relevantinput}Input`).value = "";
+        button.classList.remove("inverseAccent");
+        document.getElementById(button.dataset.relevantinput).classList.toggle("collapsed");
+      }
+      else{
+        //document.getElementById(button.dataset.relevantinput).style.display = "block";
+        button.classList.add("inverseAccent");
+        document.getElementById(button.dataset.relevantinput).classList.toggle("collapsed");
+      }
+    });
+  });
+}
+
 async function InitChat() {
   await GetDetails();
   console.debug("GOT DETAILS");
@@ -684,10 +764,12 @@ async function InitChat() {
   console.debug("Set Add User Button");
   activeSessions = await GetSessions();
   console.debug("Got open sessions");
+  SetMessageButtons();
+  console.debug("Set Message Buttons");
   themes = await GetThemes();
   console.debug("GOT THEMES");
   UpdateCSSTheme(currentTheme);
-  console.debug("SET CURRENT THEME");
+  console.debug("SET CURRENT THEME")
 }
 
 async function InitSettings(){
@@ -770,7 +852,7 @@ socket.on('onlineUsersUpdate', (msg) => {
 })
 
 socket.on("newMessageDelete", async (msg) => {
-  console.debug("Received newMessageDelete")
+  console.debug("Received newMessageDelete");
   messages = await GetMessages(targetedUserIdentifier, 0, "asc", "false");
   DisplayMessages(messages, targetedUserIdentifier, "chat", "contactBannerText");
 });
@@ -784,6 +866,15 @@ socket.on("activeSessionsUpdate", (msg) => {
     console.log("Setting button", activeSessions);
     SetSessionButton(msg.identifier);
   } 
+});
+
+socket.on("messageLockStatusChange", async (msg) => {
+  console.debug("Received messageLockStatusChange");
+
+  if(msg["identifier"] == targetedUserIdentifier){
+    messages = await GetMessages(targetedUserIdentifier, 0, "asc", "false");
+    DisplayMessages(messages, targetedUserIdentifier, "chat", "contactBannerText");
+  }
 });
 
 console.log(`PAGE : ${page}`);

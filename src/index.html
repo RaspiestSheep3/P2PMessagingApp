@@ -57,6 +57,26 @@
         <input type="file" id="fileInput" aria-label="fileInput"/>
         <button class="displayText button" id="uploadFileButton">+</button>
         <div id="messagingInputFieldWrapper">
+          <div id="messageSettingBar">
+            <button class="displayText button messageSettingButton" id="setTimeoutButton" title="setTimeoutButton" data-relevantinput="setTimeoutSettings">
+                <i class="fa fa-clock-o" aria-hidden="true"></i>
+                <i class="fa fa-lock" aria-hidden="true"></i>
+            </button>
+            <button class="displayText button messageSettingButton" id="setDisplayTimeButton" title="setDisplayTimeButton" data-relevantinput="setDisplayTimeSettings">
+                <i class="fa fa-clock-o" aria-hidden="true"></i>
+                <i class="fa fa-unlock" aria-hidden="true"></i>
+            </button>
+            <div class=" messageSettingsDiv collapsed" id="setTimeoutSettings">
+              <i class="fa fa-clock-o" aria-hidden="true"></i>
+              <i class="fa fa-lock" aria-hidden="true"></i>
+              <input type="text" class="displayText messageSettingsInput" id="setTimeoutSettingsInput" placeholder="1d 2h 3m 45s">
+            </div>
+            <div class="messageSettingsDiv collapsed" id="setDisplayTimeSettings">
+              <i class="fa fa-clock-o" aria-hidden="true"></i>
+              <i class="fa fa-unlock" aria-hidden="true"></i>
+              <input type="text" class="displayText messageSettingsInput" id="setDisplayTimeSettingsInput" placeholder="1d 2h 3m 45s">
+            </div>
+          </div>
           <textarea class="displayText input" type="text" placeholder="Write your message here" id="messagingInputField"></textarea>
           <div id="charCount">0/1900</div>
         </div>

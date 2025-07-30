@@ -16,10 +16,11 @@ import queue
 import signal
 import io
 import mimetypes  
+import itertools
 from uuid import uuid4
 from PIL import Image
 from time import sleep
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 from flask import Flask, jsonify, request, send_from_directory, send_file
 from flask_socketio import SocketIO
@@ -81,6 +82,9 @@ class Peer():
         self.openConnections = {}
         self.openConnectionsLock = threading.Lock()
         self.messagingQueues = {}
+        self.timeoutQueue = queue.PriorityQueue()
+        self.displayTimeQueue = queue.PriorityQueue()
+        self.messageSettingsCounter = itertools.count()
         self.connectionLocks = {}
         self.socketio = socketioInstance
         self.onlineUsersDict = {} #Used to check which users are online
@@ -91,6 +95,15 @@ class Peer():
         self.filesBeingUploaded = []
         self.fileChunkHeaderSizeBytes = 1024
         self.fileChunkSizeBytes = 64 * 1024 #64 KiB
+        #self.timeOffset = (datetime.now() - datetime.now(timezone.utc)).strftime("%Y-%m-%d-%H-%M-%S")
+        self.dateFormatPreference = None
+        
+        self.blankTime = {
+            "days"    : 0,
+            "hours"   : 0,
+            "minutes" : 0,
+            "seconds" : 0
+        }
         
         #Logging setup
         self.logFormatter = colorlog.ColoredFormatter(
@@ -215,6 +228,9 @@ class Peer():
                     self.onlineUsersEventDict[user.identifier].wait()
                     self.logger.info(f"Now received response from {user.identifier}")
                     self.EndSession(user.identifier)
+
+            #Starting the message settings
+            threading.Thread(target=self.MessageSettingsController).start()
 
             with self.onlineUsersDictLock:
                 self.logger.debug(f"Online users dict in Start : {self.onlineUsersDict}")
@@ -461,6 +477,8 @@ class Peer():
                         signature = base64.b64decode(message["signature"])
                         ciphertext = base64.b64decode(message["ciphertext"])
                         timestamp = message["timestamp"]
+                        timeoutTime = message["timeout"]
+                        displayTime = message["displayTime"]
                         
                         self.logger.debug(f"Nonce on receipient : {nonce.hex()}")
                         self.logger.debug(f"Ciphertext in ListenerForMessages : {ciphertext.hex()}")
@@ -492,13 +510,23 @@ class Peer():
                         
                         self.logger.info(f"RECIEVED PLAINTEXT {plaintext} which was sent at {timestamp}")
                         
+                        uuid = uuid4().hex  
+                        lockType = None
+                        
+                        if(message["timeout"] != None):
+                            self.timeoutQueue.put((message["timeout"], next(self.messageSettingsCounter), {"uuid" : uuid, "identifier" : senderIdentifier}))
+                            #lockType = "Timeout"
+                        
+                        if(message["displayTime"] != None) and (message["displayTime"] != self.blankTime):
+                            lockType = "DisplayTime"
+                            self.displayTimeQueue.put((message["displayTime"], next(self.messageSettingsCounter), {"uuid" : uuid, "identifier" : senderIdentifier}))
+                        
                         #Encrypting the message with Fernet
                         cipher = Fernet(self.fernetKey)
                         messageFernet = cipher.encrypt(plaintext.encode())
                         
                         #Adding message to the SQL
-                        uuid = uuid4().hex
-                        cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, message, type, messageRandomisation) VALUES (?, ?, ?, ?, ?)", (timestamp, senderIdentifier, messageFernet, "message", uuid))
+                        cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, message, type, messageRandomisation, timeoutTime, displayTime, locked, lockType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (timestamp, senderIdentifier, messageFernet, "message", uuid, timeoutTime, displayTime, int(displayTime != self.blankTime and displayTime != None), lockType))
                         conn.commit()
                         
                         socketIoEmit = {
@@ -616,6 +644,10 @@ class Peer():
                     filePath TEXT UNIQUE,
                     userFilename TEXT,
                     messageRandomisation TEXT NOT NULL,
+                    timeoutTime TEXT,
+                    displayTime TEXT,
+                    locked INTEGER DEFAULT 0,
+                    lockType TEXT,
                     CONSTRAINT timestampRandomisation UNIQUE (timestamp, messageRandomisation)
                 )
                 ''')
@@ -652,19 +684,36 @@ class Peer():
             message = messageQueue.get()
             messageData = message[0].encode()
             messageType = message[1]
-            self.logger.warning(f"Now Sending {messageData} to {recipientIdentifier}")
+            messageTimeout = message[2]
+            messageDisplayTime = message[3]
+            self.logger.warning(f"Now Sending {messageData} to {recipientIdentifier} with timeout {messageTimeout} and displayTime {messageDisplayTime}")
             self.logger.warning(f"sBytes check in MessageSender {self.activeSBytes[recipientIdentifier].hex()}")
-            self.SendMessage(self.activeAESKeys[recipientIdentifier], self.activeSBytes[recipientIdentifier], recipientIdentifier, messageData, messageType)
+            self.SendMessage(self.activeAESKeys[recipientIdentifier], self.activeSBytes[recipientIdentifier], recipientIdentifier, messageData, messageTimeout, messageDisplayTime, messageType)
     
-    def SendMessage(self, AESKey, sBytes, recipientIdentifier, messageData, messageType="message"):
+    def SendMessage(self, AESKey, sBytes, recipientIdentifier, messageData, messageTimeout, messageDisplayTime, messageType="message"):
         try:
             conn = sqlite3.connect(self.databaseName)
             cursor = conn.cursor()
             
-            messagePayloadRaw = self.CalculateMessage(AESKey, messageData, sBytes, self.privateKey, messageType=messageType)
+            messagePayloadRaw = self.CalculateMessage(AESKey, messageData, sBytes, self.privateKey, messageTimeout, messageDisplayTime, messageType=messageType)
             messagePayload = json.dumps(messagePayloadRaw).encode()
             self.logger.debug(f"Message Payload Length : {len(messagePayload)}")
             self.logger.info("Sending padded payload of length " + str(len(messagePayload.ljust(self.messagePadLength, b'\0'))))
+            
+            uuid = uuid4().hex
+            
+            lockType = None
+            
+            if(messagePayloadRaw["timeout"] != None):
+                self.timeoutQueue.put((messagePayloadRaw["timeout"], next(self.messageSettingsCounter), {"uuid" : uuid, "identifier" : recipientIdentifier}))
+                #lockType = "Timeout"
+            
+            if(messagePayloadRaw["displayTime"] != None) and (messagePayloadRaw["displayTime"] != self.blankTime):
+                lockType = "DisplayTime"
+                self.displayTimeQueue.put((messagePayloadRaw["displayTime"], next(self.messageSettingsCounter), {"uuid" : uuid, "identifier" : recipientIdentifier}))
+            
+            self.logger.info(f"Display Time Check : {messagePayloadRaw['displayTime'] != self.blankTime}, {messagePayloadRaw['displayTime']}")
+            
             with self.connectionLocks[recipientIdentifier]:
                 outputSocket = self.openConnections[recipientIdentifier]
                 self.logger.debug(f"AES KEY on sender : {AESKey.hex()}")
@@ -681,9 +730,9 @@ class Peer():
             #Encrypting the message with Fernet
             cipher = Fernet(self.fernetKey)
             messageFernet = cipher.encrypt(messageData)
-
+            
             #Adding message to the SQL
-            cursor.execute(f"INSERT INTO chat{recipientIdentifier} (timestamp, senderIdentifier, message, type, messageRandomisation) VALUES (?, ?, ?, ?, ?)", (messagePayloadRaw["timestamp"], identifier, messageFernet, "message", uuid4().hex))
+            cursor.execute(f"INSERT INTO chat{recipientIdentifier} (timestamp, senderIdentifier, message, type, messageRandomisation, timeoutTime, displayTime, locked, lockType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (messagePayloadRaw["timestamp"], identifier, messageFernet, "message", uuid, messagePayloadRaw["timeout"], messagePayloadRaw["displayTime"], int((messagePayloadRaw["displayTime"] != self.blankTime) and (messagePayloadRaw["displayTime"] != None)), lockType))
             conn.commit()
         except Exception as e:
             self.logger.error(f"Error {e} in SendMessage", exc_info=True)
@@ -824,6 +873,10 @@ class Peer():
                 filePath TEXT UNIQUE,
                 userFilename TEXT,
                 messageRandomisation TEXT NOT NULL,
+                timeoutTime TEXT,
+                displayTime TEXT,
+                locked INTEGER DEFAULT 0,
+                lockType TEXT,
                 CONSTRAINT timestampRandomisation UNIQUE (timestamp, messageRandomisation)
             )
             ''')
@@ -858,7 +911,7 @@ class Peer():
             connectionSocket.send(json.dumps({"type" : "closeSocket"}).encode().ljust(self.messagePadLength, b"\0"))
         return True
         
-    def CalculateMessage(self, AESKey, plaintext, sBytes, edPrivateKey, messageType="message"):
+    def CalculateMessage(self, AESKey, plaintext, sBytes, edPrivateKey,messageTimeout, messageDisplayTime, messageType="message"):
         try:
             nonce = os.urandom(12)
             aesGCM = AESGCM(AESKey)
@@ -872,19 +925,35 @@ class Peer():
             signature = edPrivateKey.sign(plaintext)
             
             #Timestamp
-            timestamp = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H-%M-%S")
+           
+            #Timeout
+            if(messageTimeout == self.blankTime):
+                messageTimeoutTime = None
+            else:
+                messageTimeoutTime = (datetime.now(timezone.utc) + timedelta(days=messageTimeout["days"], hours=messageTimeout["hours"], minutes=messageTimeout["minutes"], seconds=messageTimeout["seconds"])).strftime("%Y-%m-%d %H-%M-%S")
+                
+            #DisplayTime
+            if(messageDisplayTime == self.blankTime):
+                messageDisplayTimeTime = None
+            else:
+                messageDisplayTimeTime = (datetime.now(timezone.utc) + timedelta(days=messageDisplayTime["days"], hours=messageDisplayTime["hours"], minutes=messageDisplayTime["minutes"], seconds=messageDisplayTime["seconds"])).strftime("%Y-%m-%d %H-%M-%S")
+           
            
             self.logger.debug(f"sBytes on CalculateMessage : {sBytes.hex()}") 
             self.logger.debug(f"HMAC on sender : {hmacTag.hex()}")
             self.logger.debug(f"Nonce on sender : {nonce.hex()}")
             self.logger.debug(f"Ciphertext in sender : {ciphertext.hex()}")
+            self.logger.debug(f"timeout : {messageTimeoutTime}, displayTime : {messageDisplayTimeTime}")
             return {
                 "type" : messageType,
                 "nonce": base64.b64encode(nonce).decode(), #Doing this because json.dumps doesnt like b""
                 "hmacTag": base64.b64encode(hmacTag).decode(),
                 "signature" : base64.b64encode(signature).decode(),
                 "ciphertext": base64.b64encode(ciphertext).decode(),
-                "timestamp" : timestamp
+                "timestamp" : timestamp,
+                "timeout" : messageTimeoutTime,
+                "displayTime" : messageDisplayTimeTime
             }
         except Exception as e:
             self.logger.error(f"Error {e} in CalculateMessage", exc_info=True)
@@ -914,11 +983,56 @@ class Peer():
             rowsOutput = []
             for row in rows:
                 if(row[3] == "message"):
+                    print(type(row[10]))
+                    if(bool(row[10])):
+                        if(row[11] == "Timeout"):
+                            messageLockoutReason = "due to timeout"
+                        elif(row[11] == "DisplayTime"):
+                            datePart, timePart = row[9].split(" ")
+                            year, month, day = map(str, datePart.split("-"))
+                            hour, minute, second = map(str, timePart.split("-"))
+                            
+                            #Formatting the date right
+                            self.logger.warning(f"dateFormatPreference : {self.dateFormatPreference}")
+                            dateOutput = ""
+                            
+                            usingDashes = False
+                            if("-" in self.dateFormatPreference):
+                                usingDashes = True
+                                self.dateFormatPreference = self.dateFormatPreference.replace("-", "/")
+                            
+                            dateFormatPreferenceSplit = self.dateFormatPreference.split("/")
+                            self.logger.warning(f"Split : {dateFormatPreferenceSplit}")
+                            
+                            for split in dateFormatPreferenceSplit:
+                                self.logger.warning(f"Split bit : {split}")
+                                if("D" in split.upper()):
+                                    dateOutput += f"{day}/" 
+                                elif("M" in split.upper()):
+                                    dateOutput += f"{month}/"                           
+                                elif("Y" in split.upper()):
+                                    if(len(split) == 2):
+                                        dateOutput += f"{year[2:4]}/"
+                                    else:
+                                        dateOutput += f"{year}/"
+                            
+                            dateOutput = dateOutput.rstrip("/")
+                            if(usingDashes):
+                                dateOutput = dateOutput.replace("/", "-")
+                            
+                            messageLockoutReason = f"until {hour}:{minute}:{second} at {dateOutput}"
+                        else:
+                            messageLockoutReason = ""
+                        
+                        message = f'<i class="fa fa-lock"></i> This message is locked {messageLockoutReason} <i class="fa fa-lock"></i>'
+                    else:
+                        message = cipher.decrypt(row[2]).decode()
                     #rowsOutput.append([row[3], row[0], row[1], cipher.decrypt(row[2]).decode(), row[7]])
+                    print(f"Message in ReturnMessages : {message}")
                     rowsOutput.append({
                         "timestamp" : row[0],
                         "identifier" : row[1],
-                        "message" : cipher.decrypt(row[2]).decode(),
+                        "message" : message,
                         "type" : row[3],
                         "messageRandomisation" : row[7]
                     })
@@ -997,6 +1111,83 @@ class Peer():
             return row
         except Exception as e:
             self.logger.error(f"Error {e} in GetDetailsOfUser", exc_info=True)
+
+    def MessageSettingsController(self):
+        try:
+            self.logger.debug("Message Settings Controller running")
+            conn = sqlite3.connect(self.databaseName)
+            cursor = conn.cursor()
+            
+            #Getting all old messages
+            for knownUser in self.knownUsers:
+                self.logger.debug(f"Known user : {knownUser}")
+
+                #Sorting the rows
+                cursor.execute(f'''
+                SELECT * FROM chat{knownUser}
+                WHERE locked = 0
+                AND timeoutTime IS NOT NULL
+                ''')
+                rows = cursor.fetchall()
+                for row in rows:
+                    self.timeoutQueue.put((row[8], next(self.messageSettingsCounter), {"uuid" : row[7], "identifier" : knownUser}))
+                
+                cursor.execute(f'''
+                SELECT * FROM chat{knownUser}
+                WHERE locked = 1
+                AND lockType = 'DisplayTime'
+                ''')
+                rows = cursor.fetchall()
+                for row in rows:
+                    self.displayTimeQueue.put((row[9], next(self.messageSettingsCounter), {"uuid" : row[7], "identifier" : knownUser}))
+            
+            self.logger.debug(f"Timeout queue : {self.timeoutQueue.queue}")
+            self.logger.debug(f"DisplayTime queue : {self.displayTimeQueue.queue}")
+            
+            #nextDisplayTimeEntry = self.displayTimeQueue.get()
+            #nextDisplayTimeEntry
+            
+            #self.logger.warning(f"Next Display Time Entry : {nextDisplayTimeEntry}")
+            
+            while(True):
+                #self.logger.warning(f"Full Timeout Queue : {self.timeoutQueue.queue}")
+                while((not self.timeoutQueue.empty()) and (self.timeoutQueue.queue[0][0] <= datetime.now(timezone.utc).strftime("%Y-%m-%d %H-%M-%S"))):
+                    #Updating SQL
+                    nextTimeoutQueueEntry = self.timeoutQueue.get()
+                    self.logger.warning(f"Processing timestamp for timeout {nextTimeoutQueueEntry}")
+                    
+                    uuid = nextTimeoutQueueEntry[2]["uuid"]
+                    cursor.execute(f'''
+                    UPDATE chat{nextTimeoutQueueEntry[2]["identifier"]}
+                    SET message = NULL, locked = 1, lockType = 'Timeout'
+                    WHERE timeoutTime = ? AND messageRandomisation = ?
+                    ''', (nextTimeoutQueueEntry[0], uuid))
+                    conn.commit()
+                    
+                    socketio.emit("messageLockStatusChange", {
+                        "identifier" : nextTimeoutQueueEntry[2]["identifier"]
+                    })
+                
+                while((not self.displayTimeQueue.empty()) and (self.displayTimeQueue.queue[0][0] <= datetime.now(timezone.utc).strftime("%Y-%m-%d %H-%M-%S"))):
+                    #Updating SQL
+                    nextDisplayTimeEntry = self.displayTimeQueue.get()
+                    self.logger.warning(f"Processing timestamp for displayTime {nextDisplayTimeEntry}")
+                    
+                    uuid = nextDisplayTimeEntry[2]["uuid"]
+                    cursor.execute(f'''
+                    UPDATE chat{nextDisplayTimeEntry[2]["identifier"]}
+                    SET locked = 0
+                    WHERE displayTime = ? AND messageRandomisation = ?
+                    ''', (nextDisplayTimeEntry[0], uuid))
+                    conn.commit()
+                
+                    socketio.emit("messageLockStatusChange", {
+                        "identifier": nextDisplayTimeEntry[2]["identifier"]
+                    })
+                
+                sleep(1)
+        except Exception as e:
+            self.logger.error(f"Error {e} in MessageSettingsController", exc_info=True)
 
     def Shutdown(self):
         #Closing all sessions
@@ -1083,6 +1274,7 @@ def GetDetails():
     try:
         with open(peerDetailsFilename, "r") as fileHandle:
             details = json.load(fileHandle)
+            peer.dateFormatPreference = details["dateFormat"]
             return jsonify({
                 "identifier" : identifier,
                 "theme" : details["theme"],
@@ -1160,9 +1352,11 @@ def SendMessageToUser(otherUserID):
     content = request.json  # Get JSON from the request body
     
     message = content["message"]
-    peer.logger.debug(f"MESSAGE TO SEND TO {otherUserID}: {message}")    
+    timeout = content["timeout"]
+    displayTime = content["displayTime"]
+    peer.logger.debug(f"MESSAGE TO SEND TO {otherUserID}: {message} with timeout {timeout} and displayTime {displayTime}")    
     
-    peer.messagingQueues[otherUserID].put([message, "message"])
+    peer.messagingQueues[otherUserID].put([message, "message", timeout, displayTime])
     peer.logger.debug("Added message to message Queue")
 
     return jsonify({"status" : "success"})
@@ -1203,7 +1397,7 @@ def SendFile():
         filename = request.form.get("filename")
         otherIdentifier = request.form.get("otherIdentifier")  
 
-        timestamp = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H-%M-%S")
         binaryData = file.read()
         
         #Encrypting the data
@@ -1418,5 +1612,6 @@ if __name__ == "__main__":
     threading.Thread(target = socketio.run, kwargs={"app" : app, "port": int(frontendPort), "debug": False}).start()
     
     peer.logger.debug("STARTING UP")
+    #peer.logger.debug(f"Time Difference : {peer.timeOffset}")
     peer.Start()
     threading.Thread(target = peer.WaitForIncomingRequests, daemon=False).start()
