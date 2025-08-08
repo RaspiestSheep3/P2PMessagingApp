@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from flask import Flask, jsonify, request, send_from_directory, send_file
 from flask_socketio import SocketIO
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -960,9 +961,7 @@ class Peer():
     
     def ReturnMessages(self, otherIdentifier, amount, sort, reversed):
         try:
-            if(re.sub(r"\W+", "", otherIdentifier) != otherIdentifier): #Stopping SQL injection attack
-                self.logger.error(f'SENDER IDENTIFIER IS INVALID IN RETURNMESSAGES - ATTEMPTED SQL INJECTION (ORG : {otherIdentifier})')
-                return
+            otherIdentifier = ValidateSQL(otherIdentifier)
             
             conn = sqlite3.connect(self.databaseName)
             cursor = conn.cursor()
@@ -1409,8 +1408,18 @@ def SendFile():
         #Using fernet to ensure security as a file cannot just be read
         cipher = Fernet(peer.fernetKey)
         ciphertextFernet= cipher.encrypt(binaryData)    
-        os.makedirs(f"uploads{identifier}", exist_ok=True)
-        with open(f"uploads{identifier}/{identifier}--{otherIdentifier}--{timestamp}.bin", "wb") as fileHandle:
+        
+        #Stopping directory attacks where they try targeting the C: drive or smth
+        filePath = f"uploads{identifier}"
+        if not filePath.startswith("uploads") or ".." in filePath or os.path.isabs(filePath):
+            raise ValueError("Invalid file path")
+        
+        os.makedirs(filePath, exist_ok=True)
+        
+        fileName = f"{filePath}/{identifier}--{otherIdentifier}--{timestamp}.bin"
+        fileName = secure_filename(fileName)
+        
+        with open(fileName, "wb") as fileHandle:
             fileHandle.write(ciphertextFernet)
 
         peer.logger.debug(f"{peer.openConnections} {otherIdentifier} {peer.openConnections[otherIdentifier]}")
@@ -1436,6 +1445,8 @@ def SendFile():
         
         conn = sqlite3.connect(peer.databaseName)
         cursor = conn.cursor()
+        
+        otherIdentifier = ValidateSQL(otherIdentifier)
         cursor.execute(f"INSERT INTO chat{otherIdentifier} (timestamp, senderIdentifier, type, extension, filePath, userFilename, messageRandomisation) VALUES (?, ?, ?, ?, ?, ?, ?)", (timestamp, identifier, "file", extension, f"uploads{identifier}/{identifier}--{otherIdentifier}--{timestamp}.bin", filename, uuid4().hex))
         conn.commit()
         return {"status": "success"}
@@ -1448,6 +1459,10 @@ def SendFile():
 def GetFileData(extension, filePath):
     try:
         filePath = filePath.replace("%20", " ")
+        
+        if not filePath.startswith("uploads") or ".." in filePath or os.path.isabs(filePath):
+            raise ValueError("Invalid file path")
+        
         peer.logger.debug(f"filePath : {filePath}, extension : {extension}")
         with open(filePath, "rb") as fileHandle:
             encryptedBytes = fileHandle.read()
@@ -1500,13 +1515,19 @@ def DownloadFile():
     outputFolder = content["outputFolder"]
     fileName = content["filename"]
     
+    if not filePath.startswith("uploads") or ".." in filePath or os.path.isabs(filePath):
+        raise ValueError("Invalid file path")
+
+    fileName = secure_filename(fileName)
+    
     with open(filePath, "rb") as fileHandle:
         encryptedBytes = fileHandle.read()
     cipher = Fernet(peer.fernetKey)
     fileBytes = cipher.decrypt(encryptedBytes)
     
     os.makedirs(outputFolder, exist_ok=True)
-    with open(f"{outputFolder}/{fileName}.{extension}", "wb") as fileHandle:
+    outputPath = os.path.join(outputFolder, f"{fileName}.{extension}")
+    with open(outputPath, "wb") as fileHandle:
         fileHandle.write(fileBytes)
 
     return {"status": "success"}
@@ -1531,6 +1552,9 @@ def DeleteMessage():
     peer.logger.debug(f"Content in DeleteMessage : {content}")
     conn = sqlite3.connect(peer.databaseName)
     cursor = conn.cursor()
+    
+    content["otherIdentifier"] = ValidateSQL(content["otherIdentifier"])
+    
     if(content["deleteType"] == "me"):
         cursor.execute(f'''
         SELECT * FROM chat{content["otherIdentifier"]} WHERE timestamp = ? AND messageRandomisation = ?
@@ -1588,6 +1612,7 @@ def DeleteMessage():
                 "userFilename" : row[6],
                 "messageRandomisation" : row[7]
             }
+        
         cursor.execute(f'''
         DELETE FROM chat{content["otherIdentifier"]} WHERE timestamp = ? AND messageRandomisation = ?
         ''', (content["timestamp"], content["messageRandomisation"]))
@@ -1604,6 +1629,15 @@ def GetOpenSessions():
     output = {user : user in peer.openConnections for user in peer.knownUsers}
     peer.logger.debug(f"Output in GetOpenSessions : {output}")
     return output
+
+#SQL validation
+def ValidateSQL(inputValue):
+    #Only A-Z, 0-9 and _ allowed - stopping SQL injection
+    if not re.fullmatch(r'\w+', inputValue):
+        #raise ValueError(f"Invalid identifier: {inputValue}")
+        peer.logger.error(f"SQL Injection attempted with value {inputValue}")
+        return None
+    return inputValue
 
 if __name__ == "__main__":
     #Starting Website
