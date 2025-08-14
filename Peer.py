@@ -581,6 +581,12 @@ class Peer():
                     
                     conn.commit()
                     self.knownUsers[senderIdentifier] = PeerDetail(senderIdentifier, senderPublicKey, details["displayName"], senderHost, senderPort) #Adding to dict
+                
+                    socketio.emit("newUserUpdate", {
+                    "identifier" : senderIdentifier,
+                    "displayName" : details["displayName"]
+                    })
+                    
                 else:
                     self.logger.debug(f"ALREADY HAVE KEY FOR {senderIdentifier}")
                     cursor.execute("SELECT * FROM savedUsers WHERE identifier = ?", (senderIdentifier,))
@@ -987,6 +993,8 @@ class Peer():
                         if(row[11] == "Timeout"):
                             messageLockoutReason = "due to timeout"
                         elif(row[11] == "DisplayTime"):
+                            row[9] = FormatLocalTime(row[9])
+                            
                             datePart, timePart = row[9].split(" ")
                             year, month, day = map(str, datePart.split("-"))
                             hour, minute, second = map(str, timePart.split("-"))
@@ -1029,7 +1037,7 @@ class Peer():
                     #rowsOutput.append([row[3], row[0], row[1], cipher.decrypt(row[2]).decode(), row[7]])
                     print(f"Message in ReturnMessages : {message}")
                     rowsOutput.append({
-                        "timestamp" : row[0],
+                        "timestamp" : FormatLocalTime(row[0]),
                         "identifier" : row[1],
                         "message" : message,
                         "type" : row[3],
@@ -1038,7 +1046,7 @@ class Peer():
                 elif(row[3] == "file"):
                     #rowsOutput.append([row[3], row[0], row[1], row[4], row[5], row[6], row[7]])
                     rowsOutput.append({
-                        "timestamp"  : row[0],
+                        "timestamp"  : FormatLocalTime(row[0]),
                         "identifier" : row[1],
                         "type" : row[3],
                         "extension" : row[4],
@@ -1638,6 +1646,17 @@ def ValidateSQL(inputValue):
         peer.logger.error(f"SQL Injection attempted with value {inputValue}")
         return None
     return inputValue
+
+#Local time formatting
+def FormatLocalTime(inputTime):
+    try:
+        utcTime = datetime.strptime(inputTime, "%Y-%m-%d %H-%M-%S").replace(tzinfo=timezone.utc)
+        localTime = utcTime.astimezone()
+        output = localTime.strftime("%Y-%m-%d %H-%M-%S")
+        peer.logger.debug(f"Froamt raw : {inputTime}, output : {output}")
+        return output
+    except Exception as e:
+        peer.logger.error(f"Error {e} in FormatLocalTime for value {inputTime}")
 
 if __name__ == "__main__":
     #Starting Website

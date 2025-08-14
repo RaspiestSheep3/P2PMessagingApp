@@ -4,11 +4,6 @@
         "main" : "#8d2523",
         "accent" : "#ff4537"
     },
-    "Noir" : {
-        "background" : "#1a1a22",
-        "main" : "#a79095",
-        "accent" : "#a79095"  
-    },
     "Marsh" : {
         "background" : "#171b1c",
         "main" : "#5f6e62",
@@ -18,11 +13,6 @@
         "background" : "#292418",
         "main" : "#a48d6a",
         "accent" : "#cdba94"  
-    },
-    "Night" : {
-        "background" : "#010101",
-        "main" : "#8585a0",
-        "accent" : "#fdfdfd" 
     },
     "Sea" : {
         "background" : "#191b1a",
@@ -34,19 +24,29 @@
         "main" : "#ff327c",
         "accent" : "#ffdae8" 
     },
-    "Bee" : {
-        "background" : "#292b30",
-        "main" : "#cfab4a",
-        "accent" : "#cfab4a" 
-    },
-    "Muted" : {
-        "background" : "#333346",
-        "main" : "#8080a4",
-        "accent" : "#e6e6ec" 
-    },
     "Sunset" : {
         "background" : "#08141e",
         "main" : "#c3a38a",
         "accent" : "#997577"
+    },
+    "Gold" : {
+        "background" : "#202020",
+        "main" : "#f6cd26",
+        "accent" : "#ac6b26"  
+    },
+    "Neon" : {
+        "background" : "#131626",
+        "main" : "#e6a1cf",
+        "accent" : "#ffe6ea"  
+    },
+    "Ice" : {
+        "background" : "#201533",
+        "main" : "#0ce6f2",
+        "accent" : "#ffffff"  
+    },
+    "Cyberpunk" : {
+        "background" : "#0f1b26",
+        "main" : "#20a5a6",
+        "accent" : "#f5e8d1"  
     }
 }

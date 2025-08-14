@@ -432,7 +432,7 @@ input:checked + .slider:before {
   border-radius: 50%;
 }
 
-#chatSettings {
+.settingsFlex {
   display: flex;
   flex-direction: column;
   align-items: center;

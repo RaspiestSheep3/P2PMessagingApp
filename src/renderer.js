@@ -47,13 +47,13 @@ async function GetDetails() {
     const data = await response.json();
     
     console.log("Details fetched:", data);
-    identifier = data["identifier"]   
-    currentTheme = data["theme"] 
-    publicKey = data["publicKey"]
-    displayName = data["displayName"]
-    maxMessageLength = data["maxMessageLength"]
-    sendNotifications = data["sendNotifications"].toLowerCase() === "true"
-    use12hFormat = data["use12hFormat"].toLowerCase() === "true"
+    identifier = data["identifier"];   
+    currentTheme = data["theme"] ;
+    publicKey = data["publicKey"];
+    displayName = data["displayName"];
+    maxMessageLength = data["maxMessageLength"];
+    sendNotifications = data["sendNotifications"].toLowerCase() === "true";
+    use12hFormat = data["use12hFormat"].toLowerCase() === "true";
     dateFormat = data["dateFormat"];
 
   } catch (error) {
@@ -875,6 +875,16 @@ socket.on("messageLockStatusChange", async (msg) => {
     messages = await GetMessages(targetedUserIdentifier, 0, "asc", "false");
     DisplayMessages(messages, targetedUserIdentifier, "chat", "contactBannerText");
   }
+});
+
+socket.on("newUserUpdate", async (msg) => {
+  console.debug("New user :", msg.identifier, msg.displayName);
+  let savedUsersObject = (await GetSavedUsers())
+  savedUsers = savedUsersObject.users;
+  savedUsersMap = new Map(savedUsers);
+  onlineUsers = savedUsersObject.onlineUsers;
+  console.debug("GOT SAVED USERS and OnlineUsers");
+  DisplaySetUsers("chatlistUL", "chat", "contactBannerText",0,"asc","false",true);
 });
 
 console.log(`PAGE : ${page}`);
