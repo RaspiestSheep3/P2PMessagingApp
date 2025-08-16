@@ -62,26 +62,32 @@ async function GetDetails() {
 }
 
 function SetSidebar() {
-    //Chat page
-    document.getElementById('chatIcon').addEventListener('click', () => {
-        window.electronAPI.navigateTo('index.html');
-    });
+  const messageBox = document.getElementById("messagingInputField");
 
-    //Settings page
-    document.getElementById('settingsIcon').addEventListener('click', () => {
-        window.electronAPI.navigateTo('settings.html');
-    });
+  //Chat page
+  document.getElementById('chatIcon').addEventListener('click', () => {
+      window.electronAPI.navigateTo('index.html');
+  });
 
-    //Key Display page
-    document.getElementById('keyIcon').addEventListener('click', () => {
-        window.electronAPI.navigateTo('keydisplay.html');
-    });
+  //Settings page
+  document.getElementById('settingsIcon').addEventListener('click', async () => {
+    //Saving drafts
+    if(page==="chat" && targetedUserIdentifier != null) await SaveDraft(targetedUserIdentifier, messageBox.value);
+    window.electronAPI.navigateTo('settings.html');
+  });
 
-    //Shutdown page
-    document.getElementById("shutdownIcon").addEventListener("dblclick", () => {
-      console.log('Double-click detected!');
-      Shutdown();
-    });
+  //Key Display page
+  document.getElementById('keyIcon').addEventListener('click', async () => {
+    if(page==="chat" && targetedUserIdentifier != null) await SaveDraft(targetedUserIdentifier, messageBox.value);
+    window.electronAPI.navigateTo('keydisplay.html');
+  });
+
+  //Shutdown
+  document.getElementById("shutdownIcon").addEventListener("dblclick", async () => {
+    if(page==="chat" && targetedUserIdentifier != null) await SaveDraft(targetedUserIdentifier, messageBox.value);
+    console.log('Double-click detected!');
+    Shutdown();
+  });
 }
 
 async function Shutdown() {
@@ -151,9 +157,15 @@ function DisplaySetUsers(id, chatID, banner="", amount = 0, sort = "asc" ,revers
     li.className = "displayText chatlistElement underlineFade";
     li.id = savedUser[0]; 
     li.textContent = `${savedUser[1]} ${onlineDisplayDict[onlineUsers.includes(li.id)]}`;
-    li.addEventListener("click",() => {
+    li.addEventListener("click",async () => {
+      //Saving old draft
+      const messageBox = document.getElementById("messagingInputField");
+      if(messageBox.value != "" && messageBox.value != null && targetedUserIdentifier != null) await SaveDraft(targetedUserIdentifier, messageBox.value);
+
       targetedUserIdentifier = li.id;
       GetDisplayMessages(li.id, chatID, banner, amount, sort, reversed);
+      messageBox.value = (await GetDraft(li.id))["draft"];
+      
       if(sessionButton) SetSessionButton(li.id);
     });
     chatListUL.appendChild(li);
@@ -161,6 +173,37 @@ function DisplaySetUsers(id, chatID, banner="", amount = 0, sort = "asc" ,revers
   });
 
   return savedUsersLi;
+}
+
+async function GetDraft(otherIdentifier) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/GetDraft/${otherIdentifier}`);
+    if (!response.ok) throw new Error("Network response was not OK");
+    const data = await response.json();
+    console.log("Draft Fetched", data);
+
+    return data;
+  } catch (error) {
+      console.error("Fetch error:", error);
+  }
+}
+
+async function SaveDraft(otherIdentifier, draft) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/Post/SaveDraft`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({"otherIdentifier" : otherIdentifier, "draft" : draft})
+    });
+
+    const data = await response.json();
+    console.log("POST Response in SaveDraft:", data);
+    
+  } catch (error) {
+    console.error("Error posting data in SaveDraft:", error);
+  }
 }
 
 async function SendFile(dataToSend) {
@@ -485,6 +528,8 @@ async function SendMessage(messageBox, otherUserIdentifier, timeout, displayTime
     });
   console.log(response, "in SendMessage");
 
+  SaveDraft(otherUserIdentifier, "");
+
   const pad = (n) => n.toString().padStart(2, '0');
   const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
   const messages = await new Promise((resolve, reject) => {
@@ -769,7 +814,17 @@ async function InitChat() {
   themes = await GetThemes();
   console.debug("GOT THEMES");
   UpdateCSSTheme(currentTheme);
-  console.debug("SET CURRENT THEME")
+  console.debug("SET CURRENT THEME");
+
+  //Setting up draft saver
+  const messageBox = document.getElementById("messagingInputField");
+  const autoDraftSaveInterval = setInterval(async () => {
+    if(targetedUserIdentifier != null) {
+      await SaveDraft(targetedUserIdentifier, messageBox.value);
+      console.debug("Draft saved!");
+    }
+  }, 10000);
+
 }
 
 async function InitSettings(){

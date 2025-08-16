@@ -160,7 +160,8 @@ class Peer():
                     publicKey BLOB NOT NULL,
                     displayName TEXT NOT NULL,
                     host TEXT NOT NULL,
-                    port INTEGER NOT NULL
+                    port INTEGER NOT NULL,
+                    latestDraft BLOB
                 )
             ''')
 
@@ -1254,6 +1255,7 @@ CORS(app)  # Allows cross-origin requests
 socketio = SocketIO(app)
 
 peer = Peer(socketioInstance=socketio)
+cipher = None
 
 peerDetailsFilename = f"Peer{identifier}Details.json"
 
@@ -1414,7 +1416,6 @@ def SendFile():
         totalChunks = math.ceil(len(binaryData) / peer.fileChunkSizeBytes) 
 
         #Using fernet to ensure security as a file cannot just be read
-        cipher = Fernet(peer.fernetKey)
         ciphertextFernet= cipher.encrypt(binaryData)    
         
         #Stopping directory attacks where they try targeting the C: drive or smth
@@ -1474,7 +1475,6 @@ def GetFileData(extension, filePath):
         peer.logger.debug(f"filePath : {filePath}, extension : {extension}")
         with open(filePath, "rb") as fileHandle:
             encryptedBytes = fileHandle.read()
-        cipher = Fernet(peer.fernetKey)
         fileBytes = cipher.decrypt(encryptedBytes)
         fileIO = io.BytesIO(fileBytes)
         mimeType, _ = mimetypes.guess_type("file." + extension)
@@ -1530,7 +1530,6 @@ def DownloadFile():
     
     with open(filePath, "rb") as fileHandle:
         encryptedBytes = fileHandle.read()
-    cipher = Fernet(peer.fernetKey)
     fileBytes = cipher.decrypt(encryptedBytes)
     
     os.makedirs(outputFolder, exist_ok=True)
@@ -1569,7 +1568,6 @@ def DeleteMessage():
         ''', (content["timestamp"], content["messageRandomisation"]))
         row = cursor.fetchone()
         if(row[3] == "message"):
-            cipher = Fernet(peer.fernetKey)
             deletedRow = {
                 "timestamp" : row[0],
                 "identifier" : row[1],
@@ -1602,7 +1600,6 @@ def DeleteMessage():
         ''', (content["timestamp"], content["messageRandomisation"]))
         row = cursor.fetchone()
         if(row[3] == "message"):
-            cipher = Fernet(peer.fernetKey)
             deletedRow = {
                 "timestamp" : row[0],
                 "identifier" : row[1],
@@ -1638,6 +1635,67 @@ def GetOpenSessions():
     peer.logger.debug(f"Output in GetOpenSessions : {output}")
     return output
 
+@app.route('/api/Post/SaveDraft', methods=['POST'])
+def SaveDraft():
+    try:
+        content = request.json
+        
+        otherIdentifier = ValidateSQL(content["otherIdentifier"])
+        draftText = content["draft"]
+        
+        conn = sqlite3.connect(peer.databaseName)
+        cursor = conn.cursor()
+        
+        cipherText = cipher.encrypt(draftText.encode("utf-8"))
+        
+        peer.logger.debug(f"Cipher encrypt : {cipherText}, {draftText}")
+        
+        cursor.execute('''
+        UPDATE savedUsers
+        SET latestDraft = ?
+        WHERE identifier = ?
+        ''', (cipherText, otherIdentifier))
+        
+        conn.commit()
+        conn.close()
+
+        return {"status" : "success"}
+    except Exception as e:
+        peer.logger.error(f"Error {e} in SaveDraft", exc_info=True)
+        return {"status" : "failure"}
+
+@app.route('/api/GetDraft/<otherIdentifier>', methods=['GET'])
+def GetDraft(otherIdentifier):
+    try:
+        conn = sqlite3.connect(peer.databaseName)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+        SELECT latestDraft FROM savedUsers
+        WHERE  identifier = ?
+        ''', (otherIdentifier, ))
+        
+        draftEncrypted = cursor.fetchone()[0]
+        
+        peer.logger.debug(f"DraftEncrypted in GetDraft : {draftEncrypted}, {cipher == None} for {otherIdentifier}")
+        
+        if(draftEncrypted != None):
+            cipherDraft = Fernet(peer.fernetKey)
+            draft = (cipherDraft.decrypt(draftEncrypted))
+            
+            peer.logger.debug(f"Draft decyrpt {draft}")
+            
+            draft = draft.decode()
+        else:
+            draft = ""
+        
+        peer.logger.debug(f"Draft in GetDraft : {draft}")
+        return jsonify({"draft" : draft})
+        
+    except Exception as e:
+        peer.logger.error(f"Error {e} in GetDraft", exc_info=True)
+    
+
 #SQL validation
 def ValidateSQL(inputValue):
     #Only A-Z, 0-9 and _ allowed - stopping SQL injection
@@ -1667,4 +1725,5 @@ if __name__ == "__main__":
     peer.logger.debug("STARTING UP")
     #peer.logger.debug(f"Time Difference : {peer.timeOffset}")
     peer.Start()
+    cipher = Fernet(peer.fernetKey)
     threading.Thread(target = peer.WaitForIncomingRequests, daemon=False).start()
