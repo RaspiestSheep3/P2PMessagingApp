@@ -15,6 +15,8 @@ let activeSessions = [];
 let dateFormat = null;
 let timeoutTime = "";
 let displayTime = "";
+let isCreatingGroupChat = false; 
+let usersToAddToGroupChat = [];
 
 let currentlySendingSessionChange = false;
 //Consts 
@@ -80,6 +82,12 @@ function SetSidebar() {
   document.getElementById('keyIcon').addEventListener('click', async () => {
     if(page==="chat" && targetedUserIdentifier != null) await SaveDraft(targetedUserIdentifier, messageBox.value);
     window.electronAPI.navigateTo('keydisplay.html');
+  });
+
+  //Group chats page
+  document.getElementById('usersIcon').addEventListener('click', async () => {
+    if(page==="chat" && targetedUserIdentifier != null) await SaveDraft(targetedUserIdentifier, messageBox.value);
+    window.electronAPI.navigateTo('groupchats.html');
   });
 
   //Shutdown
@@ -789,6 +797,70 @@ function SetMessageButtons(){
   });
 }
 
+function SetupGroupChatButtons() {
+  //Setting up create group chat button
+  const createGroupChatButton = document.getElementById("createGroupChatButton");
+  const groupChatCreationPopup = document.getElementById("groupChatCreationPopup");
+  createGroupChatButton.addEventListener("click", async () => {
+    if(!isCreatingGroupChat) {
+      console.debug("Creating group chat");
+      isCreatingGroupChat = true;
+      createGroupChatButton.textContent = "Confirm Group Chat Creation";
+      groupChatCreationPopup.style.display = "flex";
+
+      let savedUsersObject = (await GetSavedUsers());
+      savedUsersMap = new Map(savedUsersObject.users);
+      console.debug(savedUsersMap);
+      const usersAddUL = document.getElementById("usersAddUL");
+      usersAddUL.innerHTML = "";
+      savedUsersMap.forEach((name, id) => {
+        let newAppend = document.createElement("li");
+        newAppend.classList.add("underlineFade");
+        console.debug(`Saved User ${name}, ${id}`);
+        newAppend.textContent = name;
+
+        //On click
+        newAppend.addEventListener("click", () => {
+          if(!usersToAddToGroupChat.includes(id)) {
+            newAppend.innerHTML += ' <i class="fa fa-check" aria-hidden="true"></i>'; 
+            usersToAddToGroupChat.push(id);
+          }
+        });
+
+        usersAddUL.appendChild(newAppend);
+      });
+
+      UserSearchBar(usersAddUL, document.getElementById("searchForUsersForGroupChatInput"));
+    }
+    else {
+      //Creating the groupchat
+      groupChatCreationPopup.style.display = "none";
+      isCreatingGroupChat = false;
+      createGroupChatButton.textContent = "Create New Group Chat";
+      usersToAddToGroupChat = [];
+    }
+  });
+}
+
+async function GetSavedGroupChats() {
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/GetSavedGroupChats`);
+    if (!response.ok) throw new Error("Network response was not OK");
+    const data = await response.json();
+    
+    console.log("Saved Users fetched:", data);
+    console.log(`Group Chats : ${data}`);
+
+    return data;
+  } catch (error) {
+      console.error("Fetch error:", error);
+  }
+}
+
+async function DisplayGroupChats() {
+
+}
+
 async function InitChat() {
   await GetDetails();
   console.debug("GOT DETAILS");
@@ -865,6 +937,19 @@ async function InitKeyDisplay(){
       DisplayOtherUserDetails(userLi.id);
     });
   });
+}
+
+async function InitGroupChatDisplay() {
+  await GetDetails();
+  console.debug("GOT DETAILS");
+  SetSidebar();
+  console.debug("SET SIDEBAR");
+  themes = await GetThemes();
+  console.debug("GOT THEMES");
+  UpdateCSSTheme(currentTheme);
+  console.debug("SET CURRENT THEME");
+  SetupGroupChatButtons();
+  console.debug("setup group chat buttons");
 }
 
 const page = document.querySelector('meta[name="viewport"]').dataset.page;
@@ -946,3 +1031,4 @@ console.log(`PAGE : ${page}`);
 if(page === "chat") InitChat();
 else if(page === "settings") InitSettings();
 else if(page === "keydisplay") InitKeyDisplay();
+else if(page === "groupchats") InitGroupChatDisplay();

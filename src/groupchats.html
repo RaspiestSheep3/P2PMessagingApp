@@ -1,13 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1" data-page="chat"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1" data-page="groupchats"/>
     <meta charset="UTF-8" />
     <title>___ Messaging</title>
-   
-    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script> <!--For socketio communications-->
-
     <!--Font Bits-->
+    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script> <!--For socketio communications-->
     <link rel="stylesheet" href="index.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -34,16 +32,15 @@
       </div>
     </div>
     <div id="chatlist">
-       <input class="input chatSearchInput" type="text" placeholder="Search For User" id="searchForUserInput">
+       <input class="input chatSearchInput" type="text" placeholder="Search For Group Chat" id="searchForGroupChatInput">
       <ul id="chatlistUL">
       </ul>
-      <div id="AddUserZone">
-        <div id="addUserHostPortLine">
-            <input class="input addUserHostPortElement" type="text" placeholder="Host" id="addUserHostInput">
-            <input class="input addUserHostPortElement" type="text" placeholder="Port" id="addUserPortInput">
-        </div>
-        <button class="displayText button underlineFade" id="AddUserButton" aria-label="Add User">Add User</button>
-      </div>
+      <button class="displayText button underlineFade" id="createGroupChatButton" aria-label="Create Group Chat">Create New Group Chat</button>
+    </div>
+    <div id="groupChatCreationPopup">
+      <input class="input chatSearchInput" type="text" placeholder="Search For Users To Add" id="searchForUsersForGroupChatInput">
+      <ul id="usersAddUL">
+      </ul>
     </div>
     <div id="chatHistory">
       <div id="contactSessionBanner">
@@ -86,7 +83,6 @@
         <button class="displayText button underlineFade" id="sendMessageButton">Send</button>
       </div>
     </div>
-
   <script src="renderer.js"></script>
   </body>
 </html>

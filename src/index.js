@@ -10,7 +10,7 @@ let mainWindow;
 let backendPort = "";
 
 const createWindow = () => {
-  const iconPath = path.join(__dirname, 'icons', 'favicon.ico'); 
+  const iconPath = path.join(__dirname, 'icons', 'favicon_alt_2.ico'); 
 
   console.debug(`ICON PATH : ${iconPath}`)
 

@@ -102,7 +102,7 @@ body {
   cursor : pointer;
 }
 
-#searchForUserInput{
+.chatSearchInput{
   margin: 10px auto;
   width : 85%;
   height: 30px;
@@ -708,4 +708,50 @@ input:checked + .slider:before {
 
 .hidden {
   display: none;
+}
+
+#createGroupChatButton {
+  margin : 5px;
+  width : 50%;
+  padding: 5px;
+  align-self: center;
+}
+
+#createGroupChatButton:hover{
+  font-weight: bold;
+}
+
+#groupChatCreationPopup {
+  position : absolute;
+  width : 20%;
+  height : 40%;
+  border : 2px solid var(--accentColour);
+  left : 33%;
+  top : 1.1%;
+  display : flex;
+  flex-direction: column;
+  background-color: var(--backgroundColour);
+  justify-content: flex-start;
+  border-radius : 5px;
+  display : none;
+}
+
+#usersAddUL {
+  list-style : none;
+  overflow-y: scroll;
+  color : var(--accentColour);
+  height : 80%;
+}
+
+#usersAddUL::-webkit-scrollbar { 
+  display: none;
+}
+
+#usersAddUL li {
+  text-align: center;
+  border : 2px solid var(--mainColour);
+  border-radius : 5px;
+  margin : 5px;
+  padding : 2px;
+  cursor : pointer;
 }
