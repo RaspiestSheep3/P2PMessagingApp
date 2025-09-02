@@ -15,6 +15,8 @@ let activeSessions = [];
 let dateFormat = null;
 let timeoutTime = "";
 let displayTime = "";
+let searchValues = [];
+let targetedSearchValue = -1;
 let isCreatingGroupChat = false; 
 let usersToAddToGroupChat = [];
 
@@ -146,12 +148,46 @@ async function GetMessages(otherIdentifier, amount, sort, reversed) {
   }
 }
 
+function SearchChat(messages, searchTerm) {
+  let outputMessages = []
+  messages.forEach(message => {
+    if((message["message"].toLowerCase()).includes(searchTerm.toLowerCase())) outputMessages.push(message);
+  });
+
+  searchValues = outputMessages;
+  targetedSearchValue = 0;
+
+  console.debug("Found messages :", outputMessages)
+}
+
+function TargetMessage(messages, searchValue) {
+  
+}
+
 async function GetDisplayMessages(id, chatID, banner, amount=0, sort="asc", reversed="false") {
   console.debug(`DISPLAYING MESSAGES FOR ${id}`);
   messages = await GetMessages(id, amount, sort, reversed);
   console.debug("GOT MESSAGES");
   DisplayMessages(messages, id, chatID, banner);
   console.debug("DISPLAYING MESSAGES");
+  //Setting up search
+  const searchButton = document.getElementById("searchChatButton");
+  if(searchButton != null) {
+    const searchPopup = document.getElementById("searchChatPopupDiv");
+    searchButton.addEventListener("click", () => {
+      searchPopup.classList.toggle("collapsed");
+      console.debug("Toggled");
+    });
+
+    const searchPopupSearch = document.getElementById("searchChatButtonSearch");
+    const searchPopupInput = document.getElementById("searchChatPopupInput");
+    searchPopupSearch.addEventListener("click", () => {
+      let searchTerm = searchPopupInput.value;
+      console.debug("Search Term :", searchTerm);
+      SearchChat(messages, searchTerm);
+
+    });
+  }
 }
 
 function DisplaySetUsers(id, chatID, banner="", amount = 0, sort = "asc" ,reversed = "false", sessionButton=false) {
@@ -169,6 +205,9 @@ function DisplaySetUsers(id, chatID, banner="", amount = 0, sort = "asc" ,revers
       //Saving old draft
       const messageBox = document.getElementById("messagingInputField");
       if(messageBox.value != "" && messageBox.value != null && targetedUserIdentifier != null) await SaveDraft(targetedUserIdentifier, messageBox.value);
+      
+      searchValues = [];
+      targetedSearchValue = -1;
 
       targetedUserIdentifier = li.id;
       GetDisplayMessages(li.id, chatID, banner, amount, sort, reversed);

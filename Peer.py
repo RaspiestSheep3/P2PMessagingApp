@@ -767,7 +767,7 @@ class Peer():
                     event.set()
                     return None
                 else:
-                    self.logger.error(f"Error connecting to {identifier} at {host}:{port} : code {e.winerror} StartSession")
+                    self.logger.error(f"Error connecting to {identifier} at {host}:{port} : code {e.winerror} StartSession", exc_info=True)
             
             #Choosing the DHE p,g and a
             p = self.GeneratePrime(self.DHEBitLength)
