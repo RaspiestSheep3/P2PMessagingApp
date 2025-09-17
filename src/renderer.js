@@ -168,13 +168,15 @@ function DisplaySetUsers(id, chatID, banner="", amount = 0, sort = "asc" ,revers
     li.addEventListener("click",async () => {
       //Saving old draft
       const messageBox = document.getElementById("messagingInputField");
-      if(messageBox.value != "" && messageBox.value != null && targetedUserIdentifier != null) await SaveDraft(targetedUserIdentifier, messageBox.value);
+      if(messageBox != null) {
+        if(messageBox.value != "" && messageBox.value != null && targetedUserIdentifier != null) await SaveDraft(targetedUserIdentifier, messageBox.value);
 
-      targetedUserIdentifier = li.id;
-      GetDisplayMessages(li.id, chatID, banner, amount, sort, reversed);
-      messageBox.value = (await GetDraft(li.id))["draft"];
-      
-      if(sessionButton) SetSessionButton(li.id);
+        targetedUserIdentifier = li.id;
+        GetDisplayMessages(li.id, chatID, banner, amount, sort, reversed);
+        messageBox.value = (await GetDraft(li.id))["draft"];
+        
+        if(sessionButton) SetSessionButton(li.id);
+      }
     });
     chatListUL.appendChild(li);
     savedUsersLi.push(li);

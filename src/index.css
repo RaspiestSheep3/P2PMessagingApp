@@ -26,10 +26,11 @@ body {
   width: 100%;
   margin: 0;
   flex-direction: row;
-  overflow-y: auto;
+  overflow-y: hidden;
   background-color: var(--backgroundColour); 
   overflow-x: hidden; /* Prevent horizontal scroll */
 }
+
 
 .displayText{
     color : var(--mainColour);
@@ -85,6 +86,7 @@ body {
   width: 65%;
   height : 97%;
   margin : 5px 5px 5px 10px;
+  padding : 5px;
 }
 
 .input {
@@ -102,7 +104,7 @@ body {
   cursor : pointer;
 }
 
-#searchForUserInput{
+.chatSearchInput{
   margin: 10px auto;
   width : 85%;
   height: 30px;
@@ -284,7 +286,7 @@ body {
 #othersKeyDisplayArea {
   display: flex;
   flex-direction: row;
-  height: 79.5%;
+  height: 77%;
   border: 2px solid var(--mainColour);
   border-radius: 20px;
   margin : 5px;
@@ -341,7 +343,7 @@ body {
 #otherUserOverviewRecentMessages {
   border: 2px solid var(--accentColour);
   border-radius: 30px;
-  height: 65%;
+  height: 60%;
   overflow-y: scroll;
   padding: 5px;
   display: flex;
@@ -352,7 +354,7 @@ body {
   display: none;
 }
 #otherUserOverviewDetails {
-  height: 25%;
+  height: 30%;
   word-wrap: break-word;
   margin-bottom: 3px;
 }
@@ -506,7 +508,8 @@ input:checked + .slider:before {
 #AddUserButton {
   margin : 5px;
   width : 50%;
-  padding: 5px;
+  height : 45%;
+  padding: 2px;
 }
 
 #AddUserButton:hover{
@@ -708,4 +711,120 @@ input:checked + .slider:before {
 
 .hidden {
   display: none;
+}
+
+#createGroupChatButton {
+  margin : 5px;
+  width : 50%;
+  padding: 5px;
+  align-self: center;
+}
+
+#createGroupChatButton:hover{
+  font-weight: bold;
+}
+
+#groupChatCreationPopup {
+  position : absolute;
+  width : 20%;
+  height : 40%;
+  border : 2px solid var(--accentColour);
+  left : 33%;
+  top : 1.1%;
+  display : flex;
+  flex-direction: column;
+  background-color: var(--backgroundColour);
+  justify-content: flex-start;
+  border-radius : 5px;
+  display : none;
+}
+
+#usersAddUL {
+  list-style : none;
+  overflow-y: scroll;
+  color : var(--accentColour);
+  height : 80%;
+}
+
+#usersAddUL::-webkit-scrollbar { 
+  display: none;
+}
+
+#usersAddUL li {
+  text-align: center;
+  border : 2px solid var(--mainColour);
+  border-radius : 5px;
+  margin : 5px;
+  padding : 2px;
+  cursor : pointer;
+}
+
+#searchChatInputDiv {
+  /*border : 2px solid var(--mainColour);*/
+  height : 50px;
+  border-radius: 20px;
+  width : 50px;
+  display: flex;
+  align-items: center;
+  /*padding : 5px; */
+  border-color: #1d1e21;
+}
+
+#searchChatButton {
+  border-color: var(--mainColour);
+  height : 100%;
+  width : 100%;
+  color: var(--accentColour);
+}
+
+#searchChatPopupDiv {
+  position : absolute;
+  border : 2px solid var(--mainColour);
+  border-radius: 10px;
+  width : 25%;
+  max-height : 40px;
+  top : 70px;
+  right : 10px;
+  margin : 5px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  transition: max-height 0.5s ease, max-width 0.5s ease, padding 0.5s ease;
+}
+
+#searchChatPopupInput{
+  margin : 5px;
+  height: 70%;
+  width : 70%;
+}
+
+.searchChatPopupButton {
+  width : 30px;
+  height : 30px;
+  margin : 3px;
+  padding : 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#searchChatPopupDiv.collapsed {
+  max-height: 0;
+  /*max-width: 0%; */
+  border-radius: 5px;
+  padding: 0;
+  overflow: hidden;
+  transition: max-height 0.5s ease, max-width 0.5s ease, padding 0.5s ease, border-radius 0.5s ease;
+}
+
+#searchChatPopupDiv > * {
+  opacity: 1;
+  /*visibility: visible; */
+  transition: opacity 0.4s ease, visibility 0s linear 0.2s;
+}
+
+#searchChatPopupDiv.collapsed > * {
+  opacity: 0;
+  /*visibility: hidden;*/
+  transition: opacity 0.4s ease, visibility 0s linear 0s;
 }
