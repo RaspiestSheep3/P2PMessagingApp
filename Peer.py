@@ -61,6 +61,12 @@ class FileUpload:
     isUploader : bool
     totalChunks : int
     userFilename : str
+    
+@dataclass
+class GroupChat:
+    groupChatIdentifier : str
+    groupChatName : str
+    groupChatUsers : list
 
 class Peer():
     def __init__ (self, incomingConnectionHost="0.0.0.0", incomingConnectionPort = incomingConnectionPortGlobal, socketioInstance = None):
@@ -98,6 +104,7 @@ class Peer():
         self.fileChunkSizeBytes = 64 * 1024 #64 KiB
         #self.timeOffset = (datetime.now() - datetime.now(timezone.utc)).strftime("%Y-%m-%d-%H-%M-%S")
         self.dateFormatPreference = None
+        self.groupChats = {}
         
         self.blankTime = {
             "days"    : 0,
@@ -171,6 +178,20 @@ class Peer():
 
             # Commit changes and close the connection
             conn.commit()
+            
+            #Group chats
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS groupChats (
+                identifier STRING NOT NULL UNIQUE,
+                name STRING NOT NULL,
+                users STRING NOT NULL
+            )
+            ''')
+            
+            cursor.execute("SELECT * FROM groupChats")
+            rows = cursor.fetchall()
+            self.groupChats = {row[0] : GroupChat(row[0], row[1], row[2].split(";")) for row in rows}
+            
             conn.close()
             
             #Setup ED25519 - Shorter keys than RSA due to elliptical witchery
@@ -752,16 +773,20 @@ class Peer():
                 
                 #Getting info about all users we don't know
                 userList = userList.split(";")
-                unknownUsers = ";".join(list(set(userList) - set(self.knownUsers))).encode()
+                
+                unknownUsersRaw = (list(set(userList) - set(self.knownUsers)))
+                unknownUsersRaw.remove(identifier)
+                unknownUsers = ";".join(unknownUsersRaw)
+                nonceUnknownUsers = os.urandom(12)
                 if(len(unknownUsers) > 0):
-                    nonceUnknownUsers = os.urandom(12)
+                    unknownUsers = unknownUsers.encode()
                     ciphertext = aesGCM.encrypt(nonceUnknownUsers, unknownUsers, None)
                     hmacTag = hmac.new(sBytes, nonceUnknownUsers + ciphertext, hashlib.sha256).digest()
-                    unknownUsersMessage = json.dumps({"unknownUsers" : base64.b64encode(ciphertext).decode(), "hmac" : base64.b64encode(hmacTag).decode(), "nonce" : base64.b64encode(nonceUnknownUsers).decode(), "signature" : base64.b64encode(self.privateKey.sign(nonceUnknownUsers + ciphertext)).decode(), "nonce" : base64.b64encode(nonceUnknownUsers).decode()})
+                    unknownUsersMessage = json.dumps({"unknownUsers" : base64.b64encode(ciphertext).decode(), "hmac" : base64.b64encode(hmacTag).decode(), "signature" : base64.b64encode(self.privateKey.sign(nonceUnknownUsers + ciphertext)).decode(), "nonce" : base64.b64encode(nonceUnknownUsers).decode()})
                     
                     peerSocket.send(unknownUsersMessage.encode().ljust(512, b"\0"))
                     
-                    for unknownUser in unknownUsers:
+                    for unknownUser in unknownUsersRaw:
                         unknownUserBroadcast = json.loads(peerSocket.recv(512).rstrip(b"\0").decode())
                         hmacTag = base64.b64decode(unknownUserBroadcast["hmac"].encode())
                         signature = base64.b64decode(unknownUserBroadcast["signature"].encode())
@@ -774,14 +799,34 @@ class Peer():
                             unknownUserPublicKey = base64.b64decode(unknownUserBroadcastPlaintext["Public Key"].encode())
                             self.knownUsers[unknownUserBroadcastPlaintext["ID"]] = PeerDetail(unknownUserBroadcastPlaintext["ID"], unknownUserPublicKey, unknownUserBroadcastPlaintext["Display Name"], unknownUserBroadcastPlaintext["Host"], unknownUserBroadcastPlaintext["Port"])
                             #Updating SQL
-                            cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName, host, port) VALUES (?, ?, ?, ?, ?)", (unknownUserBroadcastPlaintext["ID"], unknownUserPublicKey, unknownUserBroadcastPlaintext["displayName"], unknownUserBroadcastPlaintext["Host"], unknownUserBroadcastPlaintext["Port"]))
+                            cursor.execute("INSERT INTO savedUsers (identifier, publicKey, displayName, host, port) VALUES (?, ?, ?, ?, ?)", (unknownUserBroadcastPlaintext["ID"], unknownUserPublicKey, unknownUserBroadcastPlaintext["Display Name"], unknownUserBroadcastPlaintext["Host"], unknownUserBroadcastPlaintext["Port"]))
                             conn.commit()
                             self.logger.debug("Updated SQL")
+                        
+                        #Closing connection
+                        closeMessage = json.loads(peerSocket.recv(512).rstrip(b"\0").decode())
+                        self.logger.debug(f"Close message : {closeMessage}")
+                        
+                        if(closeMessage["type"] == "closeSocket"):
+                            peerSocket.shutdown(socket.SHUT_RDWR)
+                            peerSocket.close()
+                            self.logger.debug("Closed the connection for the group chat")
+                else:
+                    #Sending a message saying we already know everybody         
+                    ciphertext = aesGCM.encrypt(nonceUnknownUsers, b"None", None)
+                    hmacTag = hmac.new(sBytes, nonceUnknownUsers + ciphertext, hashlib.sha256).digest()
+                    unknownUsersMessage = json.dumps({"unknownUsers" : base64.b64encode(ciphertext).decode(), "hmac" : base64.b64encode(hmacTag).decode(), "signature" : base64.b64encode(self.privateKey.sign(nonceUnknownUsers + ciphertext)).decode(), "nonce" : base64.b64encode(nonceUnknownUsers).decode()})
+                    peerSocket.send(unknownUsersMessage.encode().ljust(512, b"\0"))
                 
                 if(invite["type"] == "groupChatCreationInvite"):
                     self.logger.debug("Creation Invite")
                     
                     #Creating the group chat
+                    
+                    cursor.execute("INSERT INTO groupChats (identifier, name, users) VALUES (?, ?, ?)", (groupChatIdentifier, groupChatName, ";".join(set(userList + [identifier]))))
+                    conn.commit()
+                    self.groupChats[groupChatIdentifier] = GroupChat(groupChatIdentifier, groupChatName, list(set(userList + [identifier])))
+                    
                     cursor.execute(f'''
                     CREATE TABLE IF NOT EXISTS groupChat{groupChatIdentifier} (
                         timestamp TEXT NOT NULL,
@@ -1821,25 +1866,6 @@ def GetDraft(otherIdentifier):
     except Exception as e:
         peer.logger.error(f"Error {e} in GetDraft", exc_info=True)
 
-def HMACSignatureTest(sBytes,hmacTag, signature, nonce, cipherText, publicKey):
-    #HMAC Test
-    expectedHMAC = hmac.new(sBytes,nonce +  cipherText, hashlib.sha256).digest()
-    if hmac.compare_digest(hmacTag, expectedHMAC):
-        peer.logger.info("HMAC TAG CORRECT")
-    else:
-        peer.logger.critical("HMAC TAG INCORRECT - DATA TAMPERED OR FORGED")
-        return False
-
-    #Signature Test
-    try:
-        publicKey.verify(signature, nonce + cipherText)
-    except InvalidSignature:
-        peer.logger.error("Signature Incorrect - Data tampered or forged")
-        return False
-    
-    return True
-    
-
 @app.route('/api/Post/CreateGroupChat', methods=['POST'])
 def CreateGroupChat():
     try:
@@ -1941,19 +1967,40 @@ def CreateGroupChat():
             if(HMACSignatureTest(sBytes, hmacTag, signature, nonceUnknownUsers, ciphertext, otherUserPublicKey)):
                 #Decryption
                 unknownUsers = aesGCM.decrypt(nonceUnknownUsers, ciphertext, None).decode().split(";")
-                for unknownUser in unknownUsers:
-                    #Sending ID, name, host, port  and public key
-                    nonceUserDetails = os.urandom(12)
-                    userDetails = peer.knownUsers[unknownUser]
-                    userDetailsPlaintext = json.dumps({"ID" : unknownUser, "Display Name" : userDetails.displayName, "Host" : userDetails.host, "Port" : userDetails.port, "Public Key" : base64.b64encode(userDetails.publicKey).decode()}).encode()
-                    userDetailsCiphertext = aesGCM.encrypt(nonceUserDetails, userDetailsPlaintext, None)
-                    hmacTag = hmac.new(sBytes, nonceUserDetails + userDetailsCiphertext, hashlib.sha256).digest()
-                    userDetailsSend = json.dumps({"nonce" : base64.b64encode(nonceUserDetails).decode(), "ciphertext" : base64.b64encode(userDetailsCiphertext).decode(), "signature" : base64.b64encode(peer.privateKey.sign(nonceUserDetails + userDetailsCiphertext)).decode(), "hmac" : base64.b64encode(hmacTag).decode()}).encode()
-                    
-                    outputSocket.send(userDetailsSend.ljust(512, b"\0"))
+                peer.logger.debug(f"Unknown Users : {unknownUsers}")
+                
+                if(unknownUsers != ["None"]):
+                    for unknownUser in unknownUsers:
+                        peer.logger.debug(f"Sending info for {unknownUser}")
+                        #Sending ID, name, host, port  and public key
+                        nonceUserDetails = os.urandom(12)
+                        userDetails = peer.knownUsers[unknownUser]
+                        userDetailsPlaintext = json.dumps({"ID" : unknownUser, "Display Name" : userDetails.displayName, "Host" : userDetails.host, "Port" : userDetails.port, "Public Key" : base64.b64encode(userDetails.publicKey).decode()}).encode()
+                        userDetailsCiphertext = aesGCM.encrypt(nonceUserDetails, userDetailsPlaintext, None)
+                        hmacTag = hmac.new(sBytes, nonceUserDetails + userDetailsCiphertext, hashlib.sha256).digest()
+                        userDetailsSend = json.dumps({"nonce" : base64.b64encode(nonceUserDetails).decode(), "ciphertext" : base64.b64encode(userDetailsCiphertext).decode(), "signature" : base64.b64encode(peer.privateKey.sign(nonceUserDetails + userDetailsCiphertext)).decode(), "hmac" : base64.b64encode(hmacTag).decode()}).encode()
+                        
+                        outputSocket.send(userDetailsSend.ljust(512, b"\0"))
+                else:
+                    peer.logger.debug(f"{userToAdd} knows all involved users")
+            #Closing the connection
+            peer.logger.debug(f"Sending closing request")
+            outputSocket.send(json.dumps({"type" : "closeSocket"}).encode().ljust(512, b"\0"))
         
+        #Closing the socket
+        sleep(0.5)
+        outputSocket.shutdown(socket.SHUT_RDWR)
+        outputSocket.close()
+            
+            
         conn = sqlite3.connect(peer.databaseName)
         cursor = conn.cursor()
+        
+        allUsers = ";".join(usersToAdd + [identifier])
+        cursor.execute("INSERT INTO groupChats (identifier, name, users) VALUES (?, ?, ?)", (groupChatIdentifier, groupChatDefaultName, allUsers))
+        conn.commit()
+        peer.groupChats[groupChatIdentifier] = GroupChat(groupChatIdentifier, groupChatDefaultName, allUsers.split(";"))
+        
         cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS groupChat{groupChatIdentifier} (
             timestamp TEXT NOT NULL,
@@ -1997,6 +2044,36 @@ def FormatLocalTime(inputTime):
         return output
     except Exception as e:
         peer.logger.error(f"Error {e} in FormatLocalTime for value {inputTime}")
+
+def HMACSignatureTest(sBytes,hmacTag, signature, nonce, cipherText, publicKey):
+    #HMAC Test
+    expectedHMAC = hmac.new(sBytes,nonce +  cipherText, hashlib.sha256).digest()
+    if hmac.compare_digest(hmacTag, expectedHMAC):
+        peer.logger.info("HMAC TAG CORRECT")
+    else:
+        peer.logger.critical("HMAC TAG INCORRECT - DATA TAMPERED OR FORGED")
+        return False
+
+    #Signature Test
+    try:
+        publicKey.verify(signature, nonce + cipherText)
+    except InvalidSignature:
+        peer.logger.error("Signature Incorrect - Data tampered or forged")
+        return False
+    
+    return True
+
+@app.route('/api/GetSavedGroupChats', methods=['GET'])
+def GetSavedGroupChats():
+    try:
+        output = [{
+            "identifier": chat.groupChatIdentifier,
+            "name": chat.groupChatName,
+            "users": chat.groupChatUsers
+        } for chat in peer.groupChats.values()]
+        return output
+    except Exception as e:
+        peer.logger.error(f"Error {e} in GetSavedGroupChats")
 
 if __name__ == "__main__":
     #Starting Website

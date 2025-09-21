@@ -600,7 +600,7 @@ input:checked + .slider:before {
   text-align: center;
   border : 2px solid var(--accentColour);
   border-radius: 10px;
-  width: 15%;
+  min-width: 15%;
   justify-content: center;
   margin: 0 auto;
   padding: 5px;
@@ -827,4 +827,20 @@ input:checked + .slider:before {
   opacity: 0;
   /*visibility: hidden;*/
   transition: opacity 0.4s ease, visibility 0s linear 0s;
+}
+
+#contactBanner.contactBannerGroupChat {
+  width : 75%;
+}
+
+#groupChatSettingsButton {
+  display: flex;
+  width : 5%;
+  height : 50px;
+  border: 2px solid var(--mainColour);
+  border-radius: 20px;
+  align-items: center;
+  justify-content: center;
+  margin: 0px 5px;
+  font-size: 30px;
 }

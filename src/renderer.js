@@ -17,6 +17,7 @@ let timeoutTime = "";
 let displayTime = "";
 let isCreatingGroupChat = false; 
 let usersToAddToGroupChat = [];
+let groupChats = null;
 
 let currentlySendingSessionChange = false;
 //Consts 
@@ -275,6 +276,7 @@ async function DeleteMessage(messageTimestamp, messageRandomisation, otherIdenti
 
 function DisplayMessages(messagesToDisplay, messagerIdentifier, chatID, banner="") {
   let chat = document.getElementById(chatID);
+  
   chat.innerHTML = "";
   let lastProcessedTime = "0000-00-00"
 
@@ -871,7 +873,6 @@ async function GetSavedGroupChats() {
     if (!response.ok) throw new Error("Network response was not OK");
     const data = await response.json();
     
-    console.log("Saved Users fetched:", data);
     console.log(`Group Chats : ${data}`);
 
     return data;
@@ -880,8 +881,24 @@ async function GetSavedGroupChats() {
   }
 }
 
-async function DisplayGroupChats() {
+function DisplayGroupChats(groupChatLiID) {
+  let chatListUL = document.getElementById(groupChatLiID);
+  chatListUL.innerHTML = "";
 
+  let groupChatsLi = [];
+
+  groupChats.forEach(groupChat => {
+    const li = document.createElement("li");
+    li.className = "displayText chatlistElement underlineFade";
+    li.id = groupChat.identifier; 
+    li.textContent = groupChat.name;
+    li.addEventListener("click",async () => {
+      const contactBannerText = document.getElementById("contactBannerText");
+      contactBannerText.textContent = groupChat.name;
+    });
+    chatListUL.appendChild(li);
+    groupChatsLi.push(li);
+  });
 }
 
 async function InitChat() {
@@ -956,8 +973,10 @@ async function InitKeyDisplay(){
   
   let usersLiList = DisplaySetUsers("otherUsersListUL", "otherUserOverviewRecentMessages", "", 2, "desc", "false");
   usersLiList.forEach(userLi => {
-    userLi.addEventListener('click', () => {
-      DisplayOtherUserDetails(userLi.id);
+    userLi.addEventListener('click', async () => {
+      await DisplayOtherUserDetails(userLi.id);
+      const messagesToDisplay = await GetMessages(userLi.id, 3, "asc", "true")
+      DisplayMessages(messagesToDisplay, "", "otherUserOverviewRecentMessages")
     });
   });
 }
@@ -973,6 +992,10 @@ async function InitGroupChatDisplay() {
   console.debug("SET CURRENT THEME");
   SetupGroupChatButtons();
   console.debug("setup group chat buttons");
+  groupChats = await GetSavedGroupChats();
+  console.log(groupChats);
+  DisplayGroupChats("chatlistUL");
+
 }
 
 const page = document.querySelector('meta[name="viewport"]').dataset.page;
@@ -1052,7 +1075,8 @@ socket.on("newUserUpdate", async (msg) => {
 
 socket.on("newGroupChat", async (msg) => {
   console.debug("New Group Chat :", msg.name, msg.addedBy);
-
+  groupChats = await GetSavedGroupChats();
+  DisplayGroupChats("chatlistUL");
   if(sendNotifications){
     console.debug("Sending Notification");
     let notificationBody = `Added by ${msg.addedBy}`;
@@ -1061,7 +1085,7 @@ socket.on("newGroupChat", async (msg) => {
         "icon" : `http://localhost:${backendPort}/api/static/icons/favicon.ico`
       });
     
-    setTimeout(() => notif.close(), 3000);
+    setTimeout(() => notif.close(), 5000);
   }
 })
 
