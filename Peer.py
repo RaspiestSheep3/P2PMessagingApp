@@ -67,6 +67,7 @@ class GroupChat:
     groupChatIdentifier : str
     groupChatName : str
     groupChatUsers : list
+    aesBits : bytes
 
 class Peer():
     def __init__ (self, incomingConnectionHost="0.0.0.0", incomingConnectionPort = incomingConnectionPortGlobal, socketioInstance = None):
@@ -105,6 +106,7 @@ class Peer():
         #self.timeOffset = (datetime.now() - datetime.now(timezone.utc)).strftime("%Y-%m-%d-%H-%M-%S")
         self.dateFormatPreference = None
         self.groupChats = {}
+        self.openGroupChats = {}
         
         self.blankTime = {
             "days"    : 0,
@@ -184,7 +186,8 @@ class Peer():
             CREATE TABLE IF NOT EXISTS groupChats (
                 identifier STRING NOT NULL UNIQUE,
                 name STRING NOT NULL,
-                users STRING NOT NULL
+                users STRING NOT NULL,
+                aesBits BLOB NOT NULL
             )
             ''')
             
@@ -702,7 +705,14 @@ class Peer():
                 
                 threading.Thread(target = self.ListenForMessages, args=(peerSocket, senderIdentifier, sBytes, AESKey, senderPublicKey), daemon=True).start()
                 threading.Thread(target=self.MessageSender, args=(senderIdentifier,)).start()
-            elif(details["type"] == "groupChatRequest"):
+
+            #Group Chat Stuff
+            
+            elif(details["type"] == "groupChatSessionStart"):
+                #We have received a new message
+                self.logger.debug("Starting a group chat session")
+           
+            elif(details["type"] == "groupChatInvite"):
                 #Handling these differently
                 self.logger.debug("Recieved a group chat request")
                 conn = sqlite3.connect(self.databaseName)
@@ -817,40 +827,38 @@ class Peer():
                     hmacTag = hmac.new(sBytes, nonceUnknownUsers + ciphertext, hashlib.sha256).digest()
                     unknownUsersMessage = json.dumps({"unknownUsers" : base64.b64encode(ciphertext).decode(), "hmac" : base64.b64encode(hmacTag).decode(), "signature" : base64.b64encode(self.privateKey.sign(nonceUnknownUsers + ciphertext)).decode(), "nonce" : base64.b64encode(nonceUnknownUsers).decode()})
                     peerSocket.send(unknownUsersMessage.encode().ljust(512, b"\0"))
+                    
+                #Creating the group chat
+                aesBits = aesGCM.decrypt(base64.b64decode(invite["nonceAESBits"].encode()), base64.b64decode(invite["aesBits"].encode()), None)
                 
-                if(invite["type"] == "groupChatCreationInvite"):
-                    self.logger.debug("Creation Invite")
-                    
-                    #Creating the group chat
-                    
-                    cursor.execute("INSERT INTO groupChats (identifier, name, users) VALUES (?, ?, ?)", (groupChatIdentifier, groupChatName, ";".join(set(userList + [identifier]))))
-                    conn.commit()
-                    self.groupChats[groupChatIdentifier] = GroupChat(groupChatIdentifier, groupChatName, list(set(userList + [identifier])))
-                    
-                    cursor.execute(f'''
-                    CREATE TABLE IF NOT EXISTS groupChat{groupChatIdentifier} (
-                        timestamp TEXT NOT NULL,
-                        senderIdentifier TEXT NOT NULL,
-                        message BLOB,
-                        type TEXT NOT NULL,
-                        extension TEXT,
-                        filePath TEXT UNIQUE,
-                        userFilename TEXT,
-                        messageRandomisation TEXT NOT NULL,
-                        timeoutTime TEXT,
-                        displayTime TEXT,
-                        locked INTEGER DEFAULT 0,
-                        lockType TEXT,
-                        CONSTRAINT timestampRandomisation UNIQUE (timestamp, messageRandomisation)
-                    )
-                    ''')
-                    conn.commit()
-                    
-                    #Alerting the frontend
-                    socketio.emit("newGroupChat", {
-                        "name" : groupChatName,
-                        "addedBy" : self.knownUsers[otherUserIdentifier].displayName 
-                    })
+                cursor.execute("INSERT INTO groupChats (identifier, name, users, aesBits) VALUES (?, ?, ?, ?)", (groupChatIdentifier, groupChatName, ";".join(set(userList + [identifier])), aesBits))
+                conn.commit()
+                self.groupChats[groupChatIdentifier] = GroupChat(groupChatIdentifier, groupChatName, list(set(userList + [identifier])), aesBits)
+                
+                cursor.execute(f'''
+                CREATE TABLE IF NOT EXISTS groupChat{groupChatIdentifier} (
+                    timestamp TEXT NOT NULL,
+                    senderIdentifier TEXT NOT NULL,
+                    message BLOB,
+                    type TEXT NOT NULL,
+                    extension TEXT,
+                    filePath TEXT UNIQUE,
+                    userFilename TEXT,
+                    messageRandomisation TEXT NOT NULL,
+                    timeoutTime TEXT,
+                    displayTime TEXT,
+                    locked INTEGER DEFAULT 0,
+                    lockType TEXT,
+                    CONSTRAINT timestampRandomisation UNIQUE (timestamp, messageRandomisation)
+                )
+                ''')
+                conn.commit()
+                
+                #Alerting the frontend
+                socketio.emit("newGroupChat", {
+                    "name" : groupChatName,
+                    "addedBy" : self.knownUsers[otherUserIdentifier].displayName 
+                })
                 
         except Exception as e:
             self.logger.error(f"Error {e} in HandleIncomingConnection", exc_info=True)
@@ -1806,6 +1814,12 @@ def GetOpenSessions():
     peer.logger.debug(f"Output in GetOpenSessions : {output}")
     return output
 
+@app.route('/api/GetOpenGroupChatSessions', methods=['GET'])
+def GetOpenGroupChatSessions():
+    output = {groupChatID : groupChatID in peer.openGroupChats for groupChatID in peer.groupChats}
+    peer.logger.debug(f"Output in GetOpenGroupChatSessions : {output}")
+    return output
+
 @app.route('/api/Post/SaveDraft', methods=['POST'])
 def SaveDraft():
     try:
@@ -1875,6 +1889,9 @@ def CreateGroupChat():
         
         groupChatIdentifier = str(uuid4()).replace("-", "")
         groupChatDefaultName = f"{identifier}'s group chat"
+        
+        #Every chat will have an associated AES key, with key rotations
+        aesBits = os.urandom(16)
         
         #Sending group chat creation messages
         for userToAdd in usersToAdd:
@@ -1948,11 +1965,12 @@ def CreateGroupChat():
             groupChatIdentifierHash = hashlib.sha256((groupChatIdentifier + groupChatDefaultName + userList).encode()).digest()
             nonceIdentifier = os.urandom(12)
             nonceUserList = os.urandom(12)
-            nonceName = os.urandom(12) 
+            nonceName = os.urandom(12)
+            nonceAESBits = os.urandom(12) 
             
             peer.logger.debug(f"Expected Group Chat Data : Identifier = {groupChatIdentifier}, name = {groupChatDefaultName}, list = {userList}, hash = {groupChatIdentifierHash}")
             
-            inviteMessage = json.dumps({"type" : "groupChatCreationInvite", "groupChatIdentifier" : base64.b64encode(aesGCM.encrypt(nonceIdentifier, groupChatIdentifier.encode(), None)).decode("utf-8"), "groupChatName" : base64.b64encode(aesGCM.encrypt(nonceName, groupChatDefaultName.encode(), None)).decode("utf-8") , "userList" : base64.b64encode(aesGCM.encrypt(nonceUserList, userList.encode(), None)).decode("utf-8"),"hash" : base64.b64encode(groupChatIdentifierHash).decode("utf-8"), "signature" : base64.b64encode(peer.privateKey.sign(groupChatIdentifierHash)).decode("utf-8"), "nonceIdentifier" : base64.b64encode(nonceIdentifier).decode("utf-8"), "nonceUserList" : base64.b64encode(nonceUserList).decode("utf-8"), "nonceName" : base64.b64encode(nonceName).decode("utf-8")})
+            inviteMessage = json.dumps({"type" : "groupChatInvite", "aesBits" : base64.b64encode(aesGCM.encrypt(nonceAESBits, aesBits, None)).decode(), "nonceAESBits" : base64.b64encode(nonceAESBits).decode() , "groupChatIdentifier" : base64.b64encode(aesGCM.encrypt(nonceIdentifier, groupChatIdentifier.encode(), None)).decode("utf-8"), "groupChatName" : base64.b64encode(aesGCM.encrypt(nonceName, groupChatDefaultName.encode(), None)).decode("utf-8") , "userList" : base64.b64encode(aesGCM.encrypt(nonceUserList, userList.encode(), None)).decode("utf-8"),"hash" : base64.b64encode(groupChatIdentifierHash).decode("utf-8"), "signature" : base64.b64encode(peer.privateKey.sign(groupChatIdentifierHash)).decode("utf-8"), "nonceIdentifier" : base64.b64encode(nonceIdentifier).decode("utf-8"), "nonceUserList" : base64.b64encode(nonceUserList).decode("utf-8"), "nonceName" : base64.b64encode(nonceName).decode("utf-8")})
             peer.logger.debug(f"Invite message : {inviteMessage}, len : {len(inviteMessage)}")
             outputSocket.send(inviteMessage.encode().ljust(2048, b"\0"))
 
@@ -1997,9 +2015,9 @@ def CreateGroupChat():
         cursor = conn.cursor()
         
         allUsers = ";".join(usersToAdd + [identifier])
-        cursor.execute("INSERT INTO groupChats (identifier, name, users) VALUES (?, ?, ?)", (groupChatIdentifier, groupChatDefaultName, allUsers))
+        cursor.execute("INSERT INTO groupChats (identifier, name, users, aesBits) VALUES (?, ?, ?, ?)", (groupChatIdentifier, groupChatDefaultName, allUsers, aesBits))
         conn.commit()
-        peer.groupChats[groupChatIdentifier] = GroupChat(groupChatIdentifier, groupChatDefaultName, allUsers.split(";"))
+        peer.groupChats[groupChatIdentifier] = GroupChat(groupChatIdentifier, groupChatDefaultName, allUsers.split(";"), aesBits)
         
         cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS groupChat{groupChatIdentifier} (

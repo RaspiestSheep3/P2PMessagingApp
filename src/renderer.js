@@ -12,6 +12,7 @@ let sendNotifications = false;
 let maxMessageLength = 0;
 let use12hFormat = false;
 let activeSessions = [];
+let activeGroupSessions = [];
 let dateFormat = null;
 let timeoutTime = "";
 let displayTime = "";
@@ -782,6 +783,20 @@ async function GetSessions(){
   }
 }
 
+async function GetGroupSessions() {
+   try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/GetOpenGroupChatSessions`);
+    if (!response.ok) throw new Error("Network response was not OK");
+    const data = await response.json();
+    
+    console.log("Open Group Chat sessions :", data);
+    return Object.keys(data).filter(key => data[key]);
+
+  } catch (error) {
+    console.error("Fetch error:", error);
+  }
+}
+
 function SetMessageButtons(){
   const messageButtons = document.querySelectorAll(".messageSettingButton");
   messageButtons.forEach(button => {
@@ -895,6 +910,12 @@ function DisplayGroupChats(groupChatLiID) {
     li.addEventListener("click",async () => {
       const contactBannerText = document.getElementById("contactBannerText");
       contactBannerText.textContent = groupChat.name;
+      
+      //Setting the session button
+      activeGroupSessions = await GetGroupSessions();
+      const sessionButton = document.getElementById("StartSessionButton");
+      if(activeGroupSessions.includes(li.id)) sessionButton.textContent = "End Session";
+      else sessionButton.textContent = "Start Session";
     });
     chatListUL.appendChild(li);
     groupChatsLi.push(li);
