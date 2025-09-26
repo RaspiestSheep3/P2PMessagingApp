@@ -26,9 +26,13 @@ body {
   width: 100%;
   margin: 0;
   flex-direction: row;
-  overflow-y: auto;
+  overflow-y: hidden;
   background-color: var(--backgroundColour); 
   overflow-x: hidden; /* Prevent horizontal scroll */
+}
+
+body::-webkit-scrollbar { 
+  display: none;
 }
 
 .displayText{
@@ -83,7 +87,8 @@ body {
   border: 3px solid var(--accentColour);
   border-radius: 20px;
   width: 65%;
-  height : 97%;
+  height : 94%;
+  padding : 10px;
   margin : 5px 5px 5px 10px;
 }
 
@@ -284,7 +289,7 @@ body {
 #othersKeyDisplayArea {
   display: flex;
   flex-direction: row;
-  height: 79.5%;
+  height: 77%;
   border: 2px solid var(--mainColour);
   border-radius: 20px;
   margin : 5px;
@@ -334,14 +339,14 @@ body {
 
 #otherUserOverviewRecentMessagesHeader {
   text-align: center;
-  margin-top: 0px;
+  margin-top: 20px;
   color: var(--accentColour);
 }
 
 #otherUserOverviewRecentMessages {
   border: 2px solid var(--accentColour);
   border-radius: 30px;
-  height: 65%;
+  height: 61%;
   overflow-y: scroll;
   padding: 5px;
   display: flex;
@@ -479,7 +484,7 @@ input:checked + .slider:before {
 
 #AddUserZone {
   margin: 5px;
-  height: 10%;
+  height: 11%;
   font-size: 20px;
   border : 2px solid var(--mainColour);
   display: flex;
@@ -506,7 +511,8 @@ input:checked + .slider:before {
 #AddUserButton {
   margin : 5px;
   width : 50%;
-  padding: 5px;
+  padding: 2px;
+  height : 45%;
 }
 
 #AddUserButton:hover{
@@ -597,7 +603,7 @@ input:checked + .slider:before {
   text-align: center;
   border : 2px solid var(--accentColour);
   border-radius: 10px;
-  width: 15%;
+  min-width: 15%;
   justify-content: center;
   margin: 0 auto;
   padding: 5px;

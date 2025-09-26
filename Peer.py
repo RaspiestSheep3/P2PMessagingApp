@@ -421,9 +421,23 @@ class Peer():
                         os.makedirs(f"uploads{identifier}", exist_ok=True)
                         with open(f"uploads{identifier}/{senderIdentifier}--{identifier}--{messageTimestamp}.bin", "wb") as fileHandle:
                             fileHandle.write(ciphertextFernet)
-                            
-                        cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, type, extension, filePath, userFilename, messageRandomisation) VALUES (?, ?, ?, ?, ?, ?, ?)", (messageTimestamp, senderIdentifier, "file", extension, f"uploads{identifier}/{senderIdentifier}--{identifier}--{messageTimestamp}.bin", userFilename, uuid4().hex))
+                        
+                        uuid = uuid4().hex    
+                        cursor.execute(f"INSERT INTO chat{senderIdentifier} (timestamp, senderIdentifier, type, extension, filePath, userFilename, messageRandomisation) VALUES (?, ?, ?, ?, ?, ?, ?)", (messageTimestamp, senderIdentifier, "file", extension, f"uploads{identifier}/{senderIdentifier}--{identifier}--{messageTimestamp}.bin", userFilename, uuid))
                         conn.commit()
+                        
+                        socketIoEmit = {
+                            "timestamp" : messageTimestamp,
+                            "senderIdentifier" : senderIdentifier,
+                            "displayName" : self.knownUsers[senderIdentifier].displayName,
+                            "type" : "file",
+                            "extension" : extension,
+                            "userFilename" : userFilename,
+                            "filePath" : f"uploads{identifier}/{senderIdentifier}--{identifier}--{messageTimestamp}.bin",
+                            "messageRandomisation" : uuid
+                        }
+                        socketio.emit("newMessageIncoming", socketIoEmit)
+                        
                     elif(message["type"] == "userDisconnect"):
                         self.logger.debug(f"{message['identifier']} has disconnected")
                         del self.onlineUsersDict[message["identifier"]]
@@ -994,9 +1008,9 @@ class Peer():
                         if(row[11] == "Timeout"):
                             messageLockoutReason = "due to timeout"
                         elif(row[11] == "DisplayTime"):
-                            row[9] = FormatLocalTime(row[9])
+                            timestamp = FormatLocalTime(row[9])
                             
-                            datePart, timePart = row[9].split(" ")
+                            datePart, timePart = timestamp.split(" ")
                             year, month, day = map(str, datePart.split("-"))
                             hour, minute, second = map(str, timePart.split("-"))
                             
@@ -1425,8 +1439,8 @@ def SendFile():
         
         os.makedirs(filePath, exist_ok=True)
         
-        fileName = f"{filePath}/{identifier}--{otherIdentifier}--{timestamp}.bin"
-        fileName = secure_filename(fileName)
+        fileName = f"{identifier}--{otherIdentifier}--{timestamp}.bin"
+        fileName = f"{filePath}/{secure_filename(fileName)}"
         
         with open(fileName, "wb") as fileHandle:
             fileHandle.write(ciphertextFernet)
@@ -1467,7 +1481,7 @@ def SendFile():
 @app.route('/api/GetFileData/<extension>/<path:filePath>', methods=['GET'])
 def GetFileData(extension, filePath):
     try:
-        filePath = filePath.replace("%20", " ")
+        filePath = filePath.replace(" ", "_")
         
         if not filePath.startswith("uploads") or ".." in filePath or os.path.isabs(filePath):
             raise ValueError("Invalid file path")
@@ -1543,12 +1557,15 @@ def DownloadFile():
 def Shutdown():
     content = request.json
     if(content["shutdown"].lower() == "true"):
+        peer.logger.warning("Starting shutdown")
         peer.Shutdown()
 
     def KillSystem():
         sleep(0.5) #Giving time for frontend to get the shutdown message
         os.kill(os.getpid(), signal.SIGINT)
-        
+    
+    peer.logger.warning("Shutting down now")
+            
     threading.Thread(target = KillSystem, daemon=True).start()
 
     return {"status": "success"}

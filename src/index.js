@@ -77,6 +77,27 @@ ipcMain.on('navigate-to', (event, page) => {
   mainWindow.loadURL(`http://localhost:${Number(backendPort)}/api/LoadPage/${page}`);
 });
 
+let isQuitting = false;
 ipcMain.on('close-app', () => {
+  isQuitting = true;
   app.quit();
+});
+
+app.on('before-quit', async (event) => {
+  if (!isQuitting) {
+    event.preventDefault();
+
+    try {
+      await fetch(`http://127.0.0.1:${backendPort}/api/Post/Shutdown`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shutdown: 'True' })
+      });
+    } catch (err) {
+      console.error('Shutdown request failed:', err);
+    }
+
+    isQuitting = true;
+    app.quit();
+  }
 });

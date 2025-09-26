@@ -160,11 +160,11 @@ function DisplaySetUsers(id, chatID, banner="", amount = 0, sort = "asc" ,revers
     li.addEventListener("click",async () => {
       //Saving old draft
       const messageBox = document.getElementById("messagingInputField");
-      if(messageBox.value != "" && messageBox.value != null && targetedUserIdentifier != null) await SaveDraft(targetedUserIdentifier, messageBox.value);
+      if(messageBox != null && messageBox.value != "" && messageBox.value != null && targetedUserIdentifier != null) await SaveDraft(targetedUserIdentifier, messageBox.value);
 
       targetedUserIdentifier = li.id;
       GetDisplayMessages(li.id, chatID, banner, amount, sort, reversed);
-      messageBox.value = (await GetDraft(li.id))["draft"];
+      if(messageBox != null) messageBox.value = (await GetDraft(li.id))["draft"];
       
       if(sessionButton) SetSessionButton(li.id);
     });
@@ -219,6 +219,16 @@ async function SendFile(dataToSend) {
   } catch (error) {
     console.error("Error posting data:", error);
   }
+  const messages = await new Promise((resolve, reject) => {
+    setTimeout(async () => {
+      try {
+        resolve(await GetMessages(targetedUserIdentifier, 0, "asc", "false"));
+      } catch (err) {
+        reject(err);
+      }
+    }, 300);
+  });
+  await DisplayMessages(messages, targetedUserIdentifier, "chat", "contactBannerText");
 }
 
 async function DownloadFile(filePath, extension, outputFolder, filename){
@@ -356,6 +366,7 @@ function DisplayMessages(messagesToDisplay, messagerIdentifier, chatID, banner="
         } 
         else {
           div.classList.add("underlineFade");
+          div.style.wordBreak = "break-all";
           div.innerHTML = `📄${messageToDisplay.userFilename.replaceAll("\n", "<br>")}.${messageToDisplay.extension}`;
           div.style.cursor = "pointer";
           div.addEventListener("click", () => {
@@ -491,6 +502,11 @@ async function DisplayOtherUserDetails(id) {
     document.getElementById("otherUserOverviewDisplayName").textContent = `Display Name : ${data.displayName}`;
     document.getElementById("otherUserOverviewIdentifier").textContent = `Identifier : ${data.identifier}`;
     document.getElementById("otherUserOverviewPublicKey").textContent = `Public Key : ${data.publicKey}`;
+    
+    //Fetching messages for display
+    const messagesToDisplay = await GetMessages(id, 3, "desc", "true");
+    DisplayMessages(messagesToDisplay, id, "otherUserOverviewRecentMessages");
+
 
   } catch (error) {
     console.error("Fetch error:", error);
@@ -872,9 +888,9 @@ const page = document.querySelector('meta[name="viewport"]').dataset.page;
 const socket = io();
 
 socket.on('newMessageIncoming', (msg) => {
-  console.debug(`New message recieved at ${msg.timestamp} from ${msg.senderIdentifier} : ${msg.message}`);
+  console.debug(`New message recieved at ${msg.timestamp} from ${msg.senderIdentifier} with type ${msg.type}`);
   console.debug(`page = ${page}, targetedUserIdentifier = ${targetedUserIdentifier}, ${targetedUserIdentifier == msg.senderIdentifier}`);
-  if(page === "chat" && targetedUserIdentifier === msg.senderIdentifier){
+  if(page === "chat" && targetedUserIdentifier === msg.senderIdentifier){ 
     console.debug("Now refreshing messages");
     messages.push(msg);
     console.debug(`${typeof(messages)}`);
@@ -886,9 +902,20 @@ socket.on('newMessageIncoming', (msg) => {
   console.debug(`SEND NOTIFICATIONS : ${sendNotifications}`);
   if(sendNotifications){
     console.debug("Sending Notification");
-    let notificationBody = msg.message.slice(0, notificationMaxLengthChars);
-    if(notificationBody.length + 3 < msg.message.length) notificationBody += "...";
-    else notificationBody = msg.message.slice(0, notificationMaxLengthChars + 3);
+    let notificationBody = "";
+    if(msg.type == "message"){
+      notificationBody = msg.message.slice(0, notificationMaxLengthChars);
+      if(notificationBody.length + 3 < msg.message.length) notificationBody += "...";
+      else notificationBody = msg.message.slice(0, notificationMaxLengthChars + 3); 
+    }
+    else{
+       const fullFilename = `File : ${msg.userFilename}.${msg.extension}`;
+      if (fullFilename.length > notificationMaxLengthChars) {
+        notificationBody = fullFilename.slice(0, notificationMaxLengthChars - 3) + "...";
+      } else {
+        notificationBody = fullFilename;
+      }
+    }
     const notif = new Notification(`New Message from ${msg.displayName}`, 
       { "body" : notificationBody,
         "icon" : `http://localhost:${backendPort}/api/static/icons/favicon.ico`
