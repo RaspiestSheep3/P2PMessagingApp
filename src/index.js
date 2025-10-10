@@ -38,8 +38,8 @@ const createWindow = () => {
     },
   });
 
-  // and load the index.html of the app.
-  mainWindow.loadURL(`http://localhost:${Number(backendPort)}/api/LoadPage/index.html`);
+  // and load the login.html of the app.
+  mainWindow.loadURL(`http://localhost:${Number(backendPort)}/api/LoadPage/login.html`);
 
   // Open the DevTools.
   mainWindow.webContents.openDevTools();

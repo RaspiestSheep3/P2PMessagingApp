@@ -7,9 +7,9 @@
 }*/
 
 :root {
-  --backgroundColour: #1d1e21;
-  --mainColour:#8d2523;
-  --accentColour: #ff4537;
+  --backgroundColour: #0f1b26;
+  --mainColour:#20a5a6;
+  --accentColour: #f5e8d1;
 }
 
 *{
@@ -365,6 +365,7 @@ body::-webkit-scrollbar {
 .otherUserDisplayText {
   font-size: 20px;
   color : var(--mainColour);
+  word-break : break-all;
 }
 
 .selfInfoText {
@@ -714,4 +715,51 @@ input:checked + .slider:before {
 
 .hidden {
   display: none;
+}
+
+#groupChatBody{
+  flex-direction: column;
+}
+
+#loginHeader {
+  border : 2px solid var(--accentColour);
+  border-radius: 20px;
+  width : 90%;
+  text-align: center;
+  font-size: 60px;
+  margin: 20px 10px 30px 10px;
+  padding : 5px;
+}
+
+#loginBox{
+  display : flex;
+  flex-direction: column;
+  border : 2px solid var(--accentColour);
+  border-radius: 10px;
+  width : 40%;
+  height : 35%;
+  padding : 5px;
+  align-items: center;
+}
+
+#loginBoxHeader {
+  text-align: center;
+  margin : 2px;
+}
+
+.loginInput {
+  margin : 4px;
+  width : 80%;
+  padding : 2px;
+}
+
+.loginRegisterButton {
+  margin : 4px;
+  width : 70%;
+  padding : 2px;
+}
+
+#errorOverview {
+  color: var(--accentColour);
+  font-weight: bold;
 }

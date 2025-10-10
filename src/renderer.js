@@ -18,6 +18,7 @@ let displayTime = "";
 
 let currentlySendingSessionChange = false;
 //Consts 
+const maxDisplayNameLength = 16;
 const stylesheet = document.documentElement.style;
 const now = new Date();
 const maxThemeButtonsInRow = 4; 
@@ -486,9 +487,9 @@ function SetThemeButtons() {
 }
 
 function DisplayKeyData() {
-  document.getElementById("selfIdentifierDisplay").textContent = `Identifier : ${identifier}`;
-  document.getElementById("selfDisplayNameDisplay").textContent = `Display Name : ${displayName}`;
-  document.getElementById("selfKeyDisplay").textContent = `Public Key : ${publicKey}`;
+  document.getElementById("selfIdentifierDisplay").textContent = `Identifier: ${identifier}`;
+  document.getElementById("selfDisplayNameDisplay").textContent = `Display Name: ${displayName}`;
+  document.getElementById("selfKeyDisplay").textContent = `Public Key: ${publicKey}`;
 }
 
 async function DisplayOtherUserDetails(id) {
@@ -499,9 +500,9 @@ async function DisplayOtherUserDetails(id) {
     
     console.log("Other User Details fetched:", data);
 
-    document.getElementById("otherUserOverviewDisplayName").textContent = `Display Name : ${data.displayName}`;
-    document.getElementById("otherUserOverviewIdentifier").textContent = `Identifier : ${data.identifier}`;
-    document.getElementById("otherUserOverviewPublicKey").textContent = `Public Key : ${data.publicKey}`;
+    document.getElementById("otherUserOverviewDisplayName").textContent = `Display Name: ${data.displayName}`;
+    document.getElementById("otherUserOverviewIdentifier").textContent = `Identifier: ${data.identifier}`;
+    document.getElementById("otherUserOverviewPublicKey").textContent = `Public Key: ${data.publicKey}`;
     
     //Fetching messages for display
     const messagesToDisplay = await GetMessages(id, 3, "desc", "true");
@@ -805,6 +806,95 @@ function SetMessageButtons(){
   });
 }
 
+function RegexDisplayNameCheck(inputValue) {
+  const pattern = /^\w+$/;
+  return (pattern.test(inputValue));
+}
+
+async function LoginUser(displayName, password, errorDisplay) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/AuthenticateUser/${displayName}/${password}`);
+    if (!response.ok) throw new Error("Network response was not OK");
+    const data = await response.json();
+    
+    console.log("Response in LoginUser", data);
+    if(data.status == "success"){
+      //Loading index HTML
+      window.electronAPI.navigateTo('index.html');
+    }
+    else {
+      errorDisplay.textContent = "Invalid Credentials";
+    }
+
+  } catch (error) {
+    console.error("Fetch error:", error);
+  }
+}
+
+async function RegisterUser(displayName, password, errorDisplay) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/Post/CreateAccount`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({"password" : password, "displayName" : displayName})
+    });
+
+    const data = await response.json();
+    console.log("POST Response in RegisterUser:", data);
+    if(data.status === "success") window.electronAPI.navigateTo('index.html');
+    
+  } catch (error) {
+    console.error("Error posting data in RegisterUser:", error);
+  }
+}
+
+function InitLoginButtons() {
+  const displayNameInput = document.getElementById("displayNameInput");
+  const passwordInput = document.getElementById("passwordInput");
+  const loginButton = document.getElementById("loginButton");
+  const registerButton = document.getElementById("registerButton");
+  const errorDisplay = document.getElementById("errorOverview");
+  loginButton.addEventListener("click", async () => {
+    const displayName = displayNameInput.value;
+    const password = passwordInput.value;
+    if(password ===  "" || displayName === "" || password === null || displayName === null) {
+      errorDisplay.textContent = "Invalid Input : Missing Credentials";
+      return;
+    }
+
+    if(!RegexDisplayNameCheck(displayName)) {
+      errorDisplay.textContent = "Invalid Input : Display Name Cannot Contain Spaces";
+      return
+    }
+    await LoginUser(displayName, password, errorDisplay);
+  });
+  registerButton.addEventListener("click", async () => {
+    const displayName = displayNameInput.value;
+    const password = passwordInput.value;
+    if(password ===  "" || displayName === "" || password === null || displayName === null) {
+      errorDisplay.textContent = "Invalid Input : Missing Credentials";
+      return;
+    }
+
+    if(!RegexDisplayNameCheck(displayName)) {
+      errorDisplay.textContent = "Invalid Input : Display Name Cannot Contain Spaces";
+      return;
+    }
+    if(displayName.length > maxDisplayNameLength) {
+      errorDisplay.textContent = "Invalid Input : Display Name Too Long";
+      return;
+    }
+
+
+    await RegisterUser(displayName, password, errorDisplay);
+  });
+  displayNameInput.addEventListener("input", () => {
+    errorDisplay.textContent = "";
+  });
+}
+
 async function InitChat() {
   await GetDetails();
   console.debug("GOT DETAILS");
@@ -881,6 +971,10 @@ async function InitKeyDisplay(){
       DisplayOtherUserDetails(userLi.id);
     });
   });
+}
+
+async function InitLogin(){
+  InitLoginButtons();
 }
 
 const page = document.querySelector('meta[name="viewport"]').dataset.page;
@@ -973,3 +1067,4 @@ console.log(`PAGE : ${page}`);
 if(page === "chat") InitChat();
 else if(page === "settings") InitSettings();
 else if(page === "keydisplay") InitKeyDisplay();
+else if(page === "login") InitLogin();

@@ -26,6 +26,7 @@ from flask import Flask, jsonify, request, send_from_directory, send_file
 from flask_socketio import SocketIO
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+from Crypto.Util import number
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -33,12 +34,6 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.exceptions import InvalidSignature
-
-#!TEMP - MAKE BETTER SYSTEM FOR IDENTIFICATION
-identifier = input("PEER IDENTIFIER : ")
-
-#!TEMP - MAKE BETTER SYSTEM FOR DISPLAY NAMES
-displayName = input("DISPLAY NAME : ")
 
 #!TEMP - MAKE BETTER WAY TO SET LISTEN PORT
 incomingConnectionPortGlobal = int(input("INCOMING CONNECTION PORT : "))
@@ -70,7 +65,7 @@ class Peer():
         self.incomingConnectionPort = incomingConnectionPort
         self.connectedAddrs = []
         self.activeConnectionThreads = []
-        self.DHEBitLength = 512 #TODO : Consider 1024 in the future
+        self.DHEBitLength = 1024
         self.messagePadLength = 8192
         self.messageLength = 1900 #A bit less than 4x bcs with UTF8 we can use 4B/char, and we need some size for overhead stuff
         self.knownUsers = []
@@ -79,7 +74,6 @@ class Peer():
         self.privateKey = None
         self.fernetKey = None
         self.hashedIdentifier =  hashlib.sha256(identifier.encode()).hexdigest()
-        self.appName = "P2PMessagingApp"
         self.openConnections = {}
         self.openConnectionsLock = threading.Lock()
         self.messagingQueues = {}
@@ -202,11 +196,11 @@ class Peer():
             self.privateKey = privateKey
             
             #Setting up Fernet key - used for SQL encryption
-            keyringKey = keyring.get_password(self.appName, self.hashedIdentifier)
+            keyringKey = keyring.get_password(appName, self.hashedIdentifier)
             if(keyringKey == None):
                 #Need to make a new keyring key
                 self.fernetKey = Fernet.generate_key()
-                keyring.set_password(self.appName, self.hashedIdentifier, self.fernetKey.decode())
+                keyring.set_password(appName, self.hashedIdentifier, self.fernetKey.decode())
             else:
                 self.fernetKey = keyringKey.encode()
             
@@ -329,6 +323,12 @@ class Peer():
                             "status" : senderIdentifier in self.openConnections
                         })
                         
+                        print(message["newUserMeeting"])
+                        if(message["newUserMeeting"]):
+                            self.onlineUsersDict[message["identifier"]] = True
+                            socketio.emit("onlineUsersUpdate", {
+                                "onlineUsers" : list(self.onlineUsersDict.keys())
+                            })
                         return
                     
                     elif(message["type"] == "closeSocketResponse"):
@@ -569,7 +569,7 @@ class Peer():
             conn = sqlite3.connect(self.databaseName)
             cursor = conn.cursor()
             
-            details = json.loads(peerSocket.recv(128).rstrip(b"\0").decode())
+            details = json.loads(peerSocket.recv(256).rstrip(b"\0").decode())
             self.logger.info(f"RECIEVED {details}")
             
             if(details["type"] == "sessionRequest"):
@@ -624,7 +624,7 @@ class Peer():
                 self.logger.debug(f"PAYLOAD {payload}")
                 
                 #Making b, finding B
-                b = self.GeneratePrime(self.DHEBitLength)
+                b = number.getStrongPrime(self.DHEBitLength)
                 B = pow(payload["g"], b, payload["p"])
                 
                 #finding s
@@ -784,9 +784,9 @@ class Peer():
                     self.logger.error(f"Error connecting to {identifier} at {host}:{port} : code {e.winerror} StartSession")
             
             #Choosing the DHE p,g and a
-            p = self.GeneratePrime(self.DHEBitLength)
-            g = self.GeneratePrime(self.DHEBitLength)
-            a = self.GeneratePrime(self.DHEBitLength)
+            p = number.getStrongPrime(self.DHEBitLength)
+            g = number.getStrongPrime(self.DHEBitLength)
+            a = number.getStrongPrime(self.DHEBitLength)
             
             self.logger.debug("FOUND P G a")
             
@@ -801,7 +801,7 @@ class Peer():
             
             #Sending a session request and the length of the payload
             self.logger.debug(f"Length Of Payload On Sender Side : {len(payload)}")
-            outputSocket.send(json.dumps({"type" : "sessionRequest", "identifier" : identifier ,"DHEPayloadLength" : len(payload), "displayName" : displayName}).encode().ljust(128, b"\0"))
+            outputSocket.send(json.dumps({"type" : "sessionRequest", "identifier" : identifier ,"DHEPayloadLength" : len(payload), "displayName" : displayName}).encode().ljust(256, b"\0"))
             self.logger.debug("SENT REQUEST + DETAILS")
             
             response = json.loads(outputSocket.recv(128).rstrip(b"\0").decode())
@@ -927,10 +927,10 @@ class Peer():
         finally:
             conn.close()   
      
-    def EndSession(self, otherUserIdentifier):
+    def EndSession(self, otherUserIdentifier, newUserMeeting = False):
         with self.connectionLocks[otherUserIdentifier]:
             connectionSocket = self.openConnections[otherUserIdentifier]
-            connectionSocket.send(json.dumps({"type" : "closeSocket"}).encode().ljust(self.messagePadLength, b"\0"))
+            connectionSocket.send(json.dumps({"type" : "closeSocket", "identifier" : identifier, "newUserMeeting" : newUserMeeting}).encode().ljust(self.messagePadLength, b"\0"))
         return True
         
     def CalculateMessage(self, AESKey, plaintext, sBytes, edPrivateKey,messageTimeout, messageDisplayTime, messageType="message"):
@@ -1115,9 +1115,13 @@ class Peer():
             for knownUser in self.knownUsers:
                 user = self.knownUsers[knownUser]
                 if(user.host == host) and (user.port == port):
-                    self.EndSession(user.identifier)
+                    self.EndSession(user.identifier, True)
                     self.logger.debug(f"SUCCESSFULLY ADDED {user.identifier}")
                     self.onlineUsersDict[user.identifier] = True
+            
+            socketio.emit("onlineUsersUpdate", {
+                "onlineUsers" : list(self.onlineUsersDict.keys())
+            })
         except Exception as e:
             self.logger.error(f"Error {e} in AddNewUser", exc_info=True)
 
@@ -1222,45 +1226,6 @@ class Peer():
             self.EndSession(onlineUser)
             self.logger.debug(f"Now disconnected from {onlineUser}")
         
-        
-
-    def GeneratePrime(self, bitLength):
-        while True:
-            # Generate random odd number of desired bit length
-            candidate = random.getrandbits(bitLength) | (1 << bitLength - 1) | 1
-            if self.IsPrime(candidate):
-                return candidate
-
-    def IsPrime(self, n, k=40):
-        #Miller - Rabin primality test
-       
-        if n <= 1:
-            return False
-        if n <= 3:
-            return True
-        if n % 2 == 0:
-            return False
-
-        # Write n-1 as 2^r * d with d odd
-        r, d = 0, n - 1
-        while d % 2 == 0:
-            d //= 2
-            r += 1
-
-        # Witness loop
-        for _ in range(k):
-            a = random.randrange(2, n - 1)
-            x = pow(a, d, n)
-            if x == 1 or x == n - 1:
-                continue
-            for _ in range(r - 1):
-                x = pow(x, 2, n)
-                if x == n - 1:
-                    break
-            else:
-                return False
-        return True
-
 
 #FLASK
 app = Flask(__name__, template_folder='src', static_folder='src')
@@ -1268,24 +1233,17 @@ app.config['SECRET_KEY'] = 'secret' #!TEMP - MAKE A BETTER KEY
 CORS(app)  # Allows cross-origin requests
 socketio = SocketIO(app)
 
-peer = Peer(socketioInstance=socketio)
+peer = None
 cipher = None
-
-peerDetailsFilename = f"Peer{identifier}Details.json"
-
-#Making sure we have a peerDetailsFilename file
-if not os.path.exists(peerDetailsFilename):
-    with open(peerDetailsFilename, "w") as fileHandle:
-        json.dump(
-        {   "theme" : "Sea",
-            "sendNotifications" : "true",
-            "use12hFormat" : "false",
-            "dateFormat" : "DD/MM/YY"
-        }, fileHandle, indent=4) 
+running = True
+appName = "P2PMessagingApp"
+displayName = None
+identifier = None
+peerDetailsFilename = None
 
 @app.route('/api/LoadPage/<page>')
 def index(page):
-    peer.logger.debug(f"page in index : {page}")
+    print(f"page in index : {page}")
     return send_from_directory(app.template_folder, page) 
 
 @app.route('/api/static/icons/<filename>')
@@ -1483,8 +1441,10 @@ def GetFileData(extension, filePath):
     try:
         filePath = filePath.replace(" ", "_")
         
-        if not filePath.startswith("uploads") or ".." in filePath or os.path.isabs(filePath):
-            raise ValueError("Invalid file path")
+        safeDirectory = os.path.abspath(f"uploads{identifier}")
+        filePath = os.path.abspath(os.path.join(safeDirectory, filePath.replace(f"uploads{identifier}/", "")))
+        if not filePath.startswith(safeDirectory):
+            return jsonify({"status": "failure", "reason": "Invalid file path"}), 400
         
         peer.logger.debug(f"filePath : {filePath}, extension : {extension}")
         with open(filePath, "rb") as fileHandle:
@@ -1537,8 +1497,10 @@ def DownloadFile():
     outputFolder = content["outputFolder"]
     fileName = content["filename"]
     
-    if not filePath.startswith("uploads") or ".." in filePath or os.path.isabs(filePath):
-        raise ValueError("Invalid file path")
+    safeDirectory = os.path.abspath(f"uploads{identifier}")
+    filePath = os.path.abspath(os.path.join(safeDirectory, filePath.replace(f"uploads{identifier}/", "")))
+    if not filePath.startswith(safeDirectory):
+        return jsonify({"status": "failure", "reason": "Invalid file path"}), 400
 
     fileName = secure_filename(fileName)
     
@@ -1546,15 +1508,22 @@ def DownloadFile():
         encryptedBytes = fileHandle.read()
     fileBytes = cipher.decrypt(encryptedBytes)
     
-    os.makedirs(outputFolder, exist_ok=True)
-    outputPath = os.path.join(outputFolder, f"{fileName}.{extension}")
-    with open(outputPath, "wb") as fileHandle:
+    safeDownloadDirectory = os.path.abspath("downloads")
+    resolvedOutputPath = os.path.abspath(os.path.join(safeDownloadDirectory, outputFolder, f"{fileName}.{extension}"))
+    
+    # Check if the resolved path is within the safe directory
+    if not resolvedOutputPath.startswith(safeDownloadDirectory):
+        return jsonify({"status": "failure", "reason": "Invalid output path"}), 400
+
+    os.makedirs(os.path.dirname(resolvedOutputPath), exist_ok=True)
+    with open(resolvedOutputPath, "wb") as fileHandle:
         fileHandle.write(fileBytes)
 
     return {"status": "success"}
 
 @app.route('/api/Post/Shutdown', methods=['POST'])
 def Shutdown():
+    global running
     content = request.json
     if(content["shutdown"].lower() == "true"):
         peer.logger.warning("Starting shutdown")
@@ -1563,6 +1532,7 @@ def Shutdown():
     def KillSystem():
         sleep(0.5) #Giving time for frontend to get the shutdown message
         os.kill(os.getpid(), signal.SIGINT)
+        running = False
     
     peer.logger.warning("Shutting down now")
             
@@ -1711,7 +1681,44 @@ def GetDraft(otherIdentifier):
         
     except Exception as e:
         peer.logger.error(f"Error {e} in GetDraft", exc_info=True)
+
+@app.route('/api/Post/CreateAccount', methods=['POST'])
+def CreateAccount():
+    try:
+        content = request.json
+        newUserPassword = content["password"]
+        newUserDisplayName = content["displayName"]
+        
+        #Generating an identifier
+        newUserIdentifier = str(uuid4().hex).replace("-", "")
+        
+        #Storing the user in keyring
+        keyring.set_password(appName, f"{hashlib.sha256(newUserPassword.encode()).hexdigest()}|{newUserDisplayName}", newUserIdentifier)
+
+        StartPeer(newUserIdentifier, newUserDisplayName)
+        return {"status" : "success"}
+    except Exception as e:
+        peer.logger.error(f"Error {e} in CreateAccount", exc_info=True)
+        return {"status" : "failure"}
+
+
+@app.route('/api/AuthenticateUser/<displayName>/<password>', methods=['GET'])
+def AuthenticateUser(displayName, password):
+    passwordHash = hashlib.sha256(password.encode()).hexdigest()
+    key = keyring.get_password(appName, f"{passwordHash}|{displayName}")
     
+    invalidAttempt = False
+    if(key == None):
+        invalidAttempt = True
+    else:
+        identifier = key
+    
+    if(invalidAttempt):
+        return {"status" : "failure"}
+    else:
+        StartPeer(identifier, displayName)
+        return {"status" : "success", "identifier" : identifier, "displayName" : displayName}
+
 
 #SQL validation
 def ValidateSQL(inputValue):
@@ -1733,14 +1740,37 @@ def FormatLocalTime(inputTime):
     except Exception as e:
         peer.logger.error(f"Error {e} in FormatLocalTime for value {inputTime}")
 
-if __name__ == "__main__":
-    #Starting Website
-    frontendPort = int(input("FRONTEND PORT : "))
-    peer.logger.debug("STARTING WEBSITE")
-    threading.Thread(target = socketio.run, kwargs={"app" : app, "port": int(frontendPort), "debug": False}).start()
+def StartPeer(inputIdentifier, inputDisplayName):
+    global peer, cipher, peerDetailsFilename, identifier, displayName
+    
+    identifier = inputIdentifier
+    displayName = inputDisplayName
+    
+    peerDetailsFilename = f"Peer{identifier}Details.json"
+
+    #Making sure we have a peerDetailsFilename file
+    if not os.path.exists(peerDetailsFilename):
+        with open(peerDetailsFilename, "w") as fileHandle:
+            json.dump(
+            {   "theme" : "Cyberpunk",
+                "sendNotifications" : "true",
+                "use12hFormat" : "false",
+                "dateFormat" : "DD/MM/YY"
+            }, fileHandle, indent=4) 
+    
+    peer = Peer(socketioInstance=socketio)
     
     peer.logger.debug("STARTING UP")
     #peer.logger.debug(f"Time Difference : {peer.timeOffset}")
     peer.Start()
     cipher = Fernet(peer.fernetKey)
     threading.Thread(target = peer.WaitForIncomingRequests, daemon=False).start()
+
+if __name__ == "__main__":
+    #Starting Website
+    frontendPort = int(input("FRONTEND PORT : "))
+    print("Starting Website")
+    threading.Thread(target = socketio.run, kwargs={"app" : app, "port": int(frontendPort), "debug": False}).start()
+    #Staying open
+    while(running):
+        sleep(1)

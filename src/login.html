@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1" data-page="login"/>
+    <meta charset="UTF-8" />
+    <title>CyberRune</title>
+   
+    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script> <!--For socketio communications-->
+
+    <!--Font Bits-->
+    <link rel="stylesheet" href="index.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css">
+  </head>
+  <body id="groupChatBody">
+    <h1 class="displayText" id="loginHeader">CyberRune</h1>
+    <div id="loginBox">
+        <h1 class="displayText" id="loginBoxHeader">Login / Register</h1>
+        <input class="input loginInput" type="text" placeholder="Display Name" id="displayNameInput">
+        <input class="input loginInput" type="text" placeholder="Password" id="passwordInput">
+        <button class="displayText button underlineFade loginRegisterButton" id="loginButton" aria-label="Login">Login</button>
+        <button class="displayText button underlineFade loginRegisterButton" id="registerButton" aria-label="Register">Register</button>
+        <p class="displayText" id="errorOverview"></p>
+    </div>
+    
+  <script src="renderer.js"></script>
+  </body>
+</html>
