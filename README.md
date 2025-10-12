@@ -92,7 +92,7 @@ CyberRune is an open-source **Peer-To-Peer Messaging App** that **avoids the usa
 
 **Settings Display** 
 
-![Messages Screenshot](Display%20Images/Gold%20All%20Messages.png)
+![Messages Screenshot](Display%20Images/Cyberpunk%20Settings.png)
 
 ---
 
