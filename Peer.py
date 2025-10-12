@@ -2,12 +2,13 @@ import socket
 import threading
 import logging
 import colorlog
-import random
+import bcrypt
 import json
 import math
 import hmac
 import hashlib
 import os
+import sys
 import base64
 import sqlite3
 import re
@@ -35,9 +36,6 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.exceptions import InvalidSignature
 
-#!TEMP - MAKE BETTER WAY TO SET LISTEN PORT
-incomingConnectionPortGlobal = int(input("INCOMING CONNECTION PORT : "))
-
 @dataclass
 class PeerDetail:
     identifier: str
@@ -58,7 +56,7 @@ class FileUpload:
     userFilename : str
 
 class Peer():
-    def __init__ (self, incomingConnectionHost="0.0.0.0", incomingConnectionPort = incomingConnectionPortGlobal, socketioInstance = None):
+    def __init__ (self, incomingConnectionHost="0.0.0.0", incomingConnectionPort = None, socketioInstance = None):
         self.connections = []
         self.incomingConnectionSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.incomingConnectionHost = incomingConnectionHost
@@ -398,7 +396,7 @@ class Peer():
                                 
                                 #Signature test
                                 try:
-                                    self.logger.warning(f"SIGNATURE (DELETE THIS) : {senderPublicKey} {type(senderPublicKey)}")
+                                    #self.logger.warning(f"SIGNATURE (DELETE THIS) : {senderPublicKey} {type(senderPublicKey)}")
                                     senderPublicKey.verify(signature, binaryPlaintext)
                                 except InvalidSignature:
                                     self.logger.critical(f"INVALID SIGNATURE - DO NOT TRUST")
@@ -418,8 +416,10 @@ class Peer():
                         cipher = Fernet(self.fernetKey)
                         ciphertextFernet= cipher.encrypt(binaryData)    
                         
+                        fullPath = r"\\?\{}".format(os.path.join(os.path.dirname(os.path.abspath(__file__)), f"uploads{identifier}", f"{senderIdentifier}--{identifier}--{messageTimestamp.replace(" ", "_")}.bin"))
+                        
                         os.makedirs(f"uploads{identifier}", exist_ok=True)
-                        with open(f"uploads{identifier}/{senderIdentifier}--{identifier}--{messageTimestamp}.bin", "wb") as fileHandle:
+                        with open(fullPath, "wb") as fileHandle:
                             fileHandle.write(ciphertextFernet)
                         
                         uuid = uuid4().hex    
@@ -518,7 +518,7 @@ class Peer():
                         
                         #Signature test
                         try:
-                            self.logger.warning(f"SIGNATURE (DELETE THIS) : {senderPublicKey} {type(senderPublicKey)}")
+                            #self.logger.warning(f"SIGNATURE (DELETE THIS) : {senderPublicKey} {type(senderPublicKey)}")
                             senderPublicKey.verify(signature, plaintextEncoded)
                         except InvalidSignature:
                             self.logger.critical(f"INVALID SIGNATURE - DO NOT TRUST")
@@ -580,7 +580,7 @@ class Peer():
                 else:
                     shouldRequestKey = False
                 self.logger.info(f"NEW REQUEST FROM {senderIdentifier}")
-                peerSocket.send(json.dumps({"type" : "sessionRequestAccept", "keyRequest" : shouldRequestKey, "identifier" : identifier}).encode().ljust(128, b"\0"))
+                peerSocket.send(json.dumps({"type" : "sessionRequestAccept", "keyRequest" : shouldRequestKey, "identifier" : identifier}).encode().ljust(256, b"\0"))
                 
                 if(shouldRequestKey):
                     self.logger.debug("REQUESTING KEY")
@@ -678,7 +678,7 @@ class Peer():
                 with self.openConnectionsLock:
                     self.openConnections[senderIdentifier] = peerSocket
             
-                self.logger.warning(f"(DELETE THIS) OPEN CONNECTIONS : {self.openConnections}")
+                #self.logger.warning(f"(DELETE THIS) OPEN CONNECTIONS : {self.openConnections}")
                 
                 #Making a lock for this message
                 if(senderIdentifier not in self.connectionLocks):
@@ -804,7 +804,7 @@ class Peer():
             outputSocket.send(json.dumps({"type" : "sessionRequest", "identifier" : identifier ,"DHEPayloadLength" : len(payload), "displayName" : displayName}).encode().ljust(256, b"\0"))
             self.logger.debug("SENT REQUEST + DETAILS")
             
-            response = json.loads(outputSocket.recv(128).rstrip(b"\0").decode())
+            response = json.loads(outputSocket.recv(256).rstrip(b"\0").decode())
             
             if(response["type"] != "sessionRequestAccept"):
                 self.logger.debug("FAILED REQUEST")
@@ -908,7 +908,7 @@ class Peer():
             with self.openConnectionsLock:
                 self.openConnections[otherIdentifier] = outputSocket
             
-                self.logger.warning(f"(DELETE THIS) OPEN CONNECTIONS : {self.openConnections}")
+                #self.logger.warning(f"(DELETE THIS) OPEN CONNECTIONS : {self.openConnections}")
             
             #Making a lock for this message
             if(otherIdentifier not in self.connectionLocks):
@@ -1229,14 +1229,19 @@ class Peer():
 
 #FLASK
 app = Flask(__name__, template_folder='src', static_folder='src')
-app.config['SECRET_KEY'] = 'secret' #!TEMP - MAKE A BETTER KEY 
+
+appName = "P2PMessagingApp"
+appKey = keyring.get_password(appName, "flaskSecret")
+if(not appKey):
+    appKey = Fernet.generate_key()
+    keyring.set_password(appName, "flaskSecret", appKey)
+app.config['SECRET_KEY'] = appKey
 CORS(app)  # Allows cross-origin requests
 socketio = SocketIO(app)
 
 peer = None
 cipher = None
 running = True
-appName = "P2PMessagingApp"
 displayName = None
 identifier = None
 peerDetailsFilename = None
@@ -1391,14 +1396,14 @@ def SendFile():
         ciphertextFernet= cipher.encrypt(binaryData)    
         
         #Stopping directory attacks where they try targeting the C: drive or smth
-        filePath = f"uploads{identifier}"
-        if not filePath.startswith("uploads") or ".." in filePath or os.path.isabs(filePath):
-            raise ValueError("Invalid file path")
+        filePath = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"uploads{identifier}")
         
         os.makedirs(filePath, exist_ok=True)
         
         fileName = f"{identifier}--{otherIdentifier}--{timestamp}.bin"
-        fileName = f"{filePath}/{secure_filename(fileName)}"
+        fileName = r"\\?\{}".format(os.path.join(filePath, secure_filename(fileName)))
+        
+        peer.logger.warning(f"filePath : {filePath}, filename : {fileName}, len : {len(str(fileName))}")
         
         with open(fileName, "wb") as fileHandle:
             fileHandle.write(ciphertextFernet)
@@ -1446,6 +1451,8 @@ def GetFileData(extension, filePath):
         if not filePath.startswith(safeDirectory):
             return jsonify({"status": "failure", "reason": "Invalid file path"}), 400
         
+        filePath = r"\\?\{}".format(filePath)
+        
         peer.logger.debug(f"filePath : {filePath}, extension : {extension}")
         with open(filePath, "rb") as fileHandle:
             encryptedBytes = fileHandle.read()
@@ -1491,41 +1498,51 @@ def GetFileData(extension, filePath):
 
 @app.route('/api/Post/DownloadFile', methods=['POST'])
 def DownloadFile():
-    content = request.json
-    extension = content["extension"]
-    filePath = content["filePath"]
-    outputFolder = content["outputFolder"]
-    fileName = content["filename"]
-    
-    safeDirectory = os.path.abspath(f"uploads{identifier}")
-    filePath = os.path.abspath(os.path.join(safeDirectory, filePath.replace(f"uploads{identifier}/", "")))
-    if not filePath.startswith(safeDirectory):
-        return jsonify({"status": "failure", "reason": "Invalid file path"}), 400
+    try:
+        content = request.json
+        extension = content["extension"]
+        filePath = content["filePath"]
+        outputFolder = content["outputFolder"]
+        fileName = content["filename"]
+        
+        safeDirectory = os.path.abspath(f"uploads{identifier}")
+        filePath = os.path.abspath(os.path.join(safeDirectory, filePath.replace(f"uploads{identifier}/", "")))
+        if not filePath.startswith(safeDirectory):
+            return jsonify({"status": "failure", "reason": "Invalid file path"}), 400
 
-    fileName = secure_filename(fileName)
-    
-    with open(filePath, "rb") as fileHandle:
-        encryptedBytes = fileHandle.read()
-    fileBytes = cipher.decrypt(encryptedBytes)
-    
-    safeDownloadDirectory = os.path.abspath("downloads")
-    resolvedOutputPath = os.path.abspath(os.path.join(safeDownloadDirectory, outputFolder, f"{fileName}.{extension}"))
-    
-    # Check if the resolved path is within the safe directory
-    if not resolvedOutputPath.startswith(safeDownloadDirectory):
-        return jsonify({"status": "failure", "reason": "Invalid output path"}), 400
+        fileName = secure_filename(fileName)
+        
+        filePath = r"\\?\{}".format(filePath).replace(" ", "_")
+        
+        peer.logger.debug(f"FileName : {fileName}, filePath : {filePath}")
+        peer.logger.debug(f"repr path: {repr(filePath)}")
+        peer.logger.debug(f"exists: {os.path.exists(filePath)}")
+        
+        with open(filePath, "rb") as fileHandle:
+            encryptedBytes = fileHandle.read()
+        fileBytes = cipher.decrypt(encryptedBytes)
+        
+        safeDownloadDirectory = os.path.abspath("downloads")
+        resolvedOutputPath = os.path.abspath(os.path.join(safeDownloadDirectory, outputFolder, f"{fileName}.{extension}"))
+        
+        # Check if the resolved path is within the safe directory
+        if not resolvedOutputPath.startswith(safeDownloadDirectory):
+            return jsonify({"status": "failure", "reason": "Invalid output path"}), 400
 
-    os.makedirs(os.path.dirname(resolvedOutputPath), exist_ok=True)
-    with open(resolvedOutputPath, "wb") as fileHandle:
-        fileHandle.write(fileBytes)
+        os.makedirs(os.path.dirname(resolvedOutputPath), exist_ok=True)
+        with open(r"\\?\{}".format(resolvedOutputPath), "wb") as fileHandle:
+            fileHandle.write(fileBytes)
 
-    return {"status": "success"}
+        return {"status": "success"}
+    except Exception as e:
+        peer.logger.error(f"Error {e} in Download File", exc_info=True)
+        return {"status" : "failure"}
 
 @app.route('/api/Post/Shutdown', methods=['POST'])
 def Shutdown():
     global running
     content = request.json
-    if(content["shutdown"].lower() == "true"):
+    if(content["shutdown"].lower() == "true") and (peer != None):
         peer.logger.warning("Starting shutdown")
         peer.Shutdown()
 
@@ -1534,7 +1551,7 @@ def Shutdown():
         os.kill(os.getpid(), signal.SIGINT)
         running = False
     
-    peer.logger.warning("Shutting down now")
+    print("Shutting down now")
             
     threading.Thread(target = KillSystem, daemon=True).start()
 
@@ -1689,13 +1706,14 @@ def CreateAccount():
         newUserPassword = content["password"]
         newUserDisplayName = content["displayName"]
         
-        #Generating an identifier
-        newUserIdentifier = str(uuid4().hex).replace("-", "")
+        hashed = bcrypt.hashpw(newUserPassword.encode(), bcrypt.gensalt())
         
         #Storing the user in keyring
-        keyring.set_password(appName, f"{hashlib.sha256(newUserPassword.encode()).hexdigest()}|{newUserDisplayName}", newUserIdentifier)
+        keyring.set_password(appName+"Authentication", newUserDisplayName, hashed.decode())
 
-        StartPeer(newUserIdentifier, newUserDisplayName)
+        print(f"Hashed : {hashed}")
+        
+        StartPeer(SanitiseKey(hashed.decode()), newUserDisplayName)
         return {"status" : "success"}
     except Exception as e:
         peer.logger.error(f"Error {e} in CreateAccount", exc_info=True)
@@ -1704,21 +1722,23 @@ def CreateAccount():
 
 @app.route('/api/AuthenticateUser/<displayName>/<password>', methods=['GET'])
 def AuthenticateUser(displayName, password):
-    passwordHash = hashlib.sha256(password.encode()).hexdigest()
-    key = keyring.get_password(appName, f"{passwordHash}|{displayName}")
-    
-    invalidAttempt = False
-    if(key == None):
-        invalidAttempt = True
-    else:
-        identifier = key
-    
-    if(invalidAttempt):
-        return {"status" : "failure"}
-    else:
-        StartPeer(identifier, displayName)
-        return {"status" : "success", "identifier" : identifier, "displayName" : displayName}
+    try:
+        key = keyring.get_password(appName+"Authentication", displayName)
+        
+        print(f"Authentication Key : {key}")
+        
+        if(key == None) or (not bcrypt.checkpw(password.encode(), key.encode())):
+            return {"status" : "failure"}
+        else:
+            StartPeer(SanitiseKey(key), displayName)
+            return {"status" : "success", "identifier" : SanitiseKey(key), "displayName" : displayName}
+    except Exception as e:
+        print(f"Error {e} in authenticateUser")
+        print(f"Key : {key}")
+        return {"status" : "failure", "error" : str(e)}
 
+def SanitiseKey(key):
+    return (key.replace("/", "_")).replace(".", "_").replace("$","X")
 
 #SQL validation
 def ValidateSQL(inputValue):
@@ -1750,15 +1770,28 @@ def StartPeer(inputIdentifier, inputDisplayName):
 
     #Making sure we have a peerDetailsFilename file
     if not os.path.exists(peerDetailsFilename):
+        #Picking a new safe port to use
+        with open("SafePorts.txt", "r+") as fileHandle:
+            safePort = int(fileHandle.readline().strip())
+            lines = fileHandle.readlines()
+            fileHandle.seek(0)
+            fileHandle.truncate(0)
+            fileHandle.writelines(lines)
+        
         with open(peerDetailsFilename, "w") as fileHandle:
             json.dump(
             {   "theme" : "Cyberpunk",
                 "sendNotifications" : "true",
                 "use12hFormat" : "false",
-                "dateFormat" : "DD/MM/YY"
+                "dateFormat" : "DD/MM/YY",
+                "port" : str(safePort)
             }, fileHandle, indent=4) 
+    else:
+        with open(peerDetailsFilename, "r") as fileHandle:
+            safePort = int(json.load(fileHandle)["port"])
+    print(f"Safe Port : {safePort}")
     
-    peer = Peer(socketioInstance=socketio)
+    peer = Peer(socketioInstance=socketio, incomingConnectionPort=safePort)
     
     peer.logger.debug("STARTING UP")
     #peer.logger.debug(f"Time Difference : {peer.timeOffset}")
@@ -1766,11 +1799,13 @@ def StartPeer(inputIdentifier, inputDisplayName):
     cipher = Fernet(peer.fernetKey)
     threading.Thread(target = peer.WaitForIncomingRequests, daemon=False).start()
 
+port = 5000
+if len(sys.argv) > 1:
+    port = int(sys.argv[1])
+
 if __name__ == "__main__":
-    #Starting Website
-    frontendPort = int(input("FRONTEND PORT : "))
-    print("Starting Website")
-    threading.Thread(target = socketio.run, kwargs={"app" : app, "port": int(frontendPort), "debug": False}).start()
-    #Staying open
-    while(running):
-        sleep(1)
+    #Starting Website   
+    #frontendPort = int(input("FRONTEND PORT : "))
+    print("Starting Website", flush=True)
+    #threading.Thread(target = socketio.run, kwargs={"app" : app, "port": 5000, "debug": False}).start()
+    socketio.run(app=app, port=port, debug=False, allow_unsafe_werkzeug=True)
